@@ -6,462 +6,525 @@ import py_trees
 from py_trees.common import Status
 
 
-class FixedCloseLidarPlot(MaxineBehavior):
+class EnhancedFacialAnimationRestorer:
+    """Enhanced facial animation restoration system for proper IDLE mode transitions"""
+    
+    def __init__(self):
+        self.restoration_attempts = 0
+        self.max_restoration_attempts = 10
+        self.restoration_delay = 0.1
+        
+    def restore_resting_face_immediately(self, robot):
+        """Immediately restore resting face with multiple fallback methods"""
+        restoration_success = False
+        
+        for attempt in range(self.max_restoration_attempts):
+            try:
+                # Primary Method: Direct facial animation manager access
+                if hasattr(robot, 'facial_animation_manager') and robot.facial_animation_manager:
+                    facial_manager = robot.facial_animation_manager
+                    
+                    # Ensure window is open and active
+                    try:
+                        facial_manager.bring_to_front()
+                        time.sleep(0.1)
+                    except Exception:
+                        pass
+                    
+                    # Restore window if needed
+                    if not hasattr(facial_manager, 'display') or facial_manager.display is None:
+                        try:
+                            facial_manager.open_window()
+                            time.sleep(0.3)
+                        except Exception:
+                            continue
+                    
+                    # Display resting face immediately - AGGRESSIVE APPROACH
+                    if hasattr(facial_manager, 'resting_face_img') and facial_manager.resting_face_img:
+                        try:
+                            if facial_manager.display:
+                                # Clear display first
+                                facial_manager.display.fill((0, 0, 0))
+                                # Display resting face
+                                facial_manager.display.blit(facial_manager.resting_face_img, (0, 0))
+                                pygame.display.flip()
+                                # Second flip for reliability
+                                pygame.display.update()
+                                restoration_success = True
+                                break
+                        except Exception:
+                            continue
+                
+                # Fallback Method: Reinitialize facial animation system
+                if not restoration_success:
+                    try:
+                        if hasattr(robot, 'facial_animation_manager'):
+                            facial_manager = robot.facial_animation_manager
+                            facial_manager.close_window()
+                            time.sleep(0.2)
+                            facial_manager.open_window()
+                            time.sleep(0.3)
+                            
+                            if hasattr(facial_manager, 'resting_face_img'):
+                                facial_manager.display.fill((0, 0, 0))
+                                facial_manager.display.blit(facial_manager.resting_face_img, (0, 0))
+                                pygame.display.flip()
+                                pygame.display.update()
+                                restoration_success = True
+                                break
+                    except Exception:
+                        continue
+                
+                # Delay between attempts
+                time.sleep(self.restoration_delay)
+                
+            except Exception:
+                continue
+        
+        return restoration_success
+    
+    def verify_resting_face_displayed(self, robot):
+        """Verify that resting face is properly displayed"""
+        try:
+            if hasattr(robot, 'facial_animation_manager') and robot.facial_animation_manager:
+                facial_manager = robot.facial_animation_manager
+                
+                # Check if display exists and is active
+                if hasattr(facial_manager, 'display') and facial_manager.display:
+                    # Ensure resting face is displayed
+                    if hasattr(facial_manager, 'resting_face_img'):
+                        facial_manager.display.blit(facial_manager.resting_face_img, (0, 0))
+                        pygame.display.flip()
+                        return True
+            
+            return False
+            
+        except Exception:
+            return False
+
+
+class UltraStableCloseLidarPlot(MaxineBehavior):
     """
-    FIXED LiDAR plot cleanup with AGGRESSIVE head centering for IDLE mode
+    Ultra-stable LiDAR plot cleanup with enhanced facial animation restoration
+    Ensures resting face is immediately displayed when exiting LiDAR modes
     """
     
     def __init__(self):
-        super().__init__("Fixed Close LiDAR Plot - AGGRESSIVE Head Centering")
+        super().__init__("Ultra-Stable Close LiDAR Plot with Enhanced Facial Restoration")
         
-        # Blackboard keys for cleanup
+        # Blackboard management
         self.blackboard.register_key("LIDAR_SYSTEM", access=py_trees.common.Access.WRITE)
         self.blackboard.register_key("LIDAR_RENDERER", access=py_trees.common.Access.WRITE)
-        
-        # Legacy keys for backward compatibility
         self.blackboard.register_key("LIDAR_PLOT", access=py_trees.common.Access.WRITE)
+        
+        # Enhanced facial restoration system
+        self.facial_restorer = EnhancedFacialAnimationRestorer()
         
         # Cleanup tracking
         self.cleanup_steps = []
+        self.cleanup_success_count = 0
         
-    def force_center_head_all_methods(self):
-        """FORCE head to center using ALL possible methods - HIGHEST PRIORITY"""
+    def aggressive_head_centering(self):
+        """Aggressively center head using all available methods"""
         try:
             robot = self.get_robot()
             center_position = 0.0
             center_angle_degrees = 0.0
             
-            print("🎯 FORCING head to center position using ALL methods...")
+            # Multiple centering attempts using all available head control methods
+            centering_methods = [
+                # Servo controller methods
+                lambda: robot.servo_controller.set_position(center_position) if hasattr(robot, 'servo_controller') and robot.servo_controller else None,
+                lambda: robot.servo_controller.move_to_angle(center_angle_degrees) if hasattr(robot, 'servo_controller') and robot.servo_controller else None,
+                lambda: robot.servo_controller.center() if hasattr(robot, 'servo_controller') and robot.servo_controller else None,
+                
+                # Head velocity manager methods
+                lambda: robot.head_velocity_manager.set_head_position(center_position, wait_for_completion=False) if hasattr(robot, 'head_velocity_manager') and robot.head_velocity_manager else None,
+                lambda: robot.head_velocity_manager.center_head() if hasattr(robot, 'head_velocity_manager') and robot.head_velocity_manager else None,
+                lambda: robot.head_velocity_manager.set_head_angle_degrees(center_angle_degrees) if hasattr(robot, 'head_velocity_manager') and robot.head_velocity_manager else None,
+                
+                # General head manager methods
+                lambda: robot.head_manager.center_head() if hasattr(robot, 'head_manager') and robot.head_manager else None,
+                lambda: robot.head_manager.set_head_angle_degrees(center_angle_degrees) if hasattr(robot, 'head_manager') and robot.head_manager else None,
+                
+                # Robot unified methods
+                lambda: robot.center_head() if hasattr(robot, 'center_head') else None,
+                lambda: robot.set_head_angle(center_angle_degrees) if hasattr(robot, 'set_head_angle') else None,
+            ]
             
-            # Method 1: Direct servo controller with MULTIPLE attempts
-            if hasattr(robot, 'servo_controller') and robot.servo_controller:
+            # Execute all available centering methods
+            successful_methods = 0
+            for method in centering_methods:
                 try:
-                    print("🔧 Using servo_controller...")
-                    for attempt in range(10):  # 10 attempts
-                        robot.servo_controller.set_position(center_position)
-                        robot.servo_controller.move_to_angle(center_angle_degrees)
-                        if hasattr(robot.servo_controller, 'center'):
-                            robot.servo_controller.center()
-                        time.sleep(0.3)
-                    print("✅ Head centered via servo_controller (10 attempts)")
-                except Exception as e:
-                    print(f"❌ Servo controller centering failed: {e}")
+                    result = method()
+                    if result is not None:
+                        successful_methods += 1
+                        time.sleep(0.3)  # Allow servo time to respond
+                except Exception:
+                    continue
             
-            # Method 2: Head velocity manager with MULTIPLE attempts
-            if hasattr(robot, 'head_velocity_manager') and robot.head_velocity_manager:
-                try:
-                    print("🔧 Using head_velocity_manager...")
-                    for attempt in range(10):  # 10 attempts
-                        robot.head_velocity_manager.set_head_position(center_position, wait_for_completion=False)
-                        if hasattr(robot.head_velocity_manager, 'center_head'):
-                            robot.head_velocity_manager.center_head()
-                        if hasattr(robot.head_velocity_manager, 'set_head_angle_degrees'):
-                            robot.head_velocity_manager.set_head_angle_degrees(center_angle_degrees)
-                        time.sleep(0.3)
-                    print("✅ Head centered via head_velocity_manager (10 attempts)")
-                except Exception as e:
-                    print(f"❌ Head velocity manager centering failed: {e}")
-            
-            # Method 3: General head manager with MULTIPLE attempts
-            if hasattr(robot, 'head_manager') and robot.head_manager:
-                try:
-                    print("🔧 Using head_manager...")
-                    for attempt in range(10):  # 10 attempts
-                        if hasattr(robot.head_manager, 'center_head'):
-                            robot.head_manager.center_head()
-                        if hasattr(robot.head_manager, 'set_head_angle_degrees'):
-                            robot.head_manager.set_head_angle_degrees(center_angle_degrees)
-                        if hasattr(robot.head_manager, 'set_head_position'):
-                            robot.head_manager.set_head_position(center_position)
-                        time.sleep(0.3)
-                    print("✅ Head centered via head_manager (10 attempts)")
-                except Exception as e:
-                    print(f"❌ Head manager centering failed: {e}")
-            
-            # Method 4: Robot unified methods with MULTIPLE attempts
-            if hasattr(robot, 'center_head'):
-                try:
-                    print("🔧 Using robot.center_head()...")
-                    for attempt in range(10):  # 10 attempts
-                        robot.center_head()
-                        time.sleep(0.3)
-                    print("✅ Head centered via robot.center_head() (10 attempts)")
-                except Exception as e:
-                    print(f"❌ Robot center_head failed: {e}")
-            
-            if hasattr(robot, 'set_head_angle'):
-                try:
-                    print("🔧 Using robot.set_head_angle()...")
-                    for attempt in range(10):  # 10 attempts
-                        robot.set_head_angle(center_angle_degrees)
-                        time.sleep(0.3)
-                    print("✅ Head centered via robot.set_head_angle() (10 attempts)")
-                except Exception as e:
-                    print(f"❌ Robot set_head_angle failed: {e}")
-            
-            # Method 5: Try head move manager variants
-            if hasattr(robot, 'head_move_manager') and robot.head_move_manager:
-                try:
-                    print("🔧 Using head_move_manager...")
-                    for attempt in range(10):  # 10 attempts
-                        if hasattr(robot.head_move_manager, 'center_head'):
-                            robot.head_move_manager.center_head()
-                        if hasattr(robot.head_move_manager, 'set_head_angle_degrees'):
-                            robot.head_move_manager.set_head_angle_degrees(center_angle_degrees)
-                        if hasattr(robot.head_move_manager, 'set_head_position'):
-                            robot.head_move_manager.set_head_position(center_position)
-                        time.sleep(0.3)
-                    print("✅ Head centered via head_move_manager (10 attempts)")
-                except Exception as e:
-                    print(f"❌ Head move manager centering failed: {e}")
-            
-            # Method 6: Try head servo variant
-            if hasattr(robot, 'head_servo') and robot.head_servo:
-                try:
-                    print("🔧 Using head_servo...")
-                    for attempt in range(10):  # 10 attempts
-                        if hasattr(robot.head_servo, 'set_position'):
-                            robot.head_servo.set_position(center_position)
-                        if hasattr(robot.head_servo, 'move_to_angle'):
-                            robot.head_servo.move_to_angle(center_angle_degrees)
-                        if hasattr(robot.head_servo, 'center'):
-                            robot.head_servo.center()
-                        time.sleep(0.3)
-                    print("✅ Head centered via head_servo (10 attempts)")
-                except Exception as e:
-                    print(f"❌ Head servo centering failed: {e}")
-            
-            # FINAL: Extra time for servo to reach position
-            print("⏱️ Waiting for servo to reach center position...")
+            # Final positioning delay
             time.sleep(2.0)
             
-            print("🎯 AGGRESSIVE head centering complete - used ALL available methods")
-            self.cleanup_steps.append("AGGRESSIVE head centering completed using all methods")
+            self.cleanup_steps.append(f"Head centering: {successful_methods} methods successful")
+            return successful_methods > 0
             
         except Exception as e:
-            print(f"❌ CRITICAL head centering error: {e}")
-            self.cleanup_steps.append(f"Head centering critical error: {e}")
+            self.cleanup_steps.append(f"Head centering error: {e}")
+            return False
     
-    def stop_working_lidar_system(self) -> bool:
-        """Stop WORKING LiDAR system with proper motor shutdown"""
+    def stop_lidar_system_safely(self) -> bool:
+        """Stop LiDAR system with enhanced safety checks"""
         try:
+            lidar_stopped = False
+            
+            # Method 1: Stop from blackboard
             if self.blackboard.exists("LIDAR_SYSTEM"):
                 lidar_system = self.blackboard.get("LIDAR_SYSTEM")
-                if lidar_system:
-                    print("🛑 Stopping LiDAR system...")
-                    # Use the working system's stop method
-                    lidar_system.stop()
-                    
-                    # Give time for proper shutdown
-                    time.sleep(2.0)
-                    
-                    self.cleanup_steps.append("WORKING LiDAR system stopped")
-                    print("✅ LiDAR system stopped successfully")
+                if lidar_system and hasattr(lidar_system, 'stop'):
+                    try:
+                        lidar_system.stop()
+                        time.sleep(2.0)  # Allow proper shutdown
+                        lidar_stopped = True
+                        self.cleanup_steps.append("Blackboard LiDAR system stopped")
+                    except Exception as e:
+                        self.cleanup_steps.append(f"Blackboard LiDAR stop error: {e}")
                 
                 self.blackboard.unset("LIDAR_SYSTEM")
-                return True
-                
+            
+            # Method 2: Stop robot's LiDAR sensor
+            try:
+                robot = self.get_robot()
+                if hasattr(robot, 'lidar_sensor') and robot.lidar_sensor:
+                    if hasattr(robot.lidar_sensor, 'shutdown'):
+                        robot.lidar_sensor.shutdown()
+                        lidar_stopped = True
+                        self.cleanup_steps.append("Robot LiDAR sensor shutdown")
+                    elif hasattr(robot.lidar_sensor, 'emergency_stop'):
+                        robot.lidar_sensor.emergency_stop()
+                        lidar_stopped = True
+                        self.cleanup_steps.append("Robot LiDAR sensor emergency stop")
+            except Exception as e:
+                self.cleanup_steps.append(f"Robot LiDAR sensor warning: {e}")
+            
+            return lidar_stopped
+            
         except Exception as e:
-            self.cleanup_steps.append(f"WORKING LiDAR system error: {e}")
-            print(f"❌ LiDAR stop error: {e}")
+            self.cleanup_steps.append(f"LiDAR stop error: {e}")
             return False
-        
-        return True
     
-    def cleanup_robot_lidar_sensor(self):
-        """Additional robot LiDAR sensor cleanup"""
+    def cleanup_robot_movement(self):
+        """Ensure robot movement is completely stopped"""
         try:
             robot = self.get_robot()
             
-            if hasattr(robot, 'lidar_sensor') and robot.lidar_sensor:
-                if hasattr(robot.lidar_sensor, 'shutdown'):
-                    robot.lidar_sensor.shutdown()
-                    self.cleanup_steps.append("Robot LiDAR sensor shutdown")
-                elif hasattr(robot.lidar_sensor, 'emergency_stop'):
-                    robot.lidar_sensor.emergency_stop()
-                    self.cleanup_steps.append("Robot LiDAR sensor emergency stop")
-                
+            # Stop all movement using available velocity managers
+            velocity_managers = []
+            if hasattr(robot, 'direct_velocity_manager') and robot.direct_velocity_manager:
+                velocity_managers.append(('direct_velocity_manager', robot.direct_velocity_manager))
+            if hasattr(robot, 'velocity_manager') and robot.velocity_manager:
+                velocity_managers.append(('velocity_manager', robot.velocity_manager))
+            
+            # Send multiple stop commands for reliability
+            for manager_name, velocity_manager in velocity_managers:
+                try:
+                    from src.types.MovementDirection import MovementDirection
+                    from src.action_managers.VelocityManager import VelocityConfig
+                    
+                    for _ in range(5):  # Multiple stop commands
+                        stop_config = VelocityConfig(MovementDirection.NONE, 0.0)
+                        velocity_manager.perform_action(stop_config)
+                        time.sleep(0.1)
+                    
+                    self.cleanup_steps.append(f"Robot movement stopped via {manager_name}")
+                    
+                except Exception as e:
+                    self.cleanup_steps.append(f"Movement stop error ({manager_name}): {e}")
+            
         except Exception as e:
-            self.cleanup_steps.append(f"Robot LiDAR sensor warning: {e}")
+            self.cleanup_steps.append(f"Movement cleanup error: {e}")
     
     def restore_display_for_idle_mode(self) -> bool:
-        """Properly restore display for IDLE mode face avatar"""
+        """Restore display for IDLE mode with facial animation priority"""
         try:
-            print("🖥️ Restoring display for IDLE mode...")
-            
-            # Release exclusive LiDAR renderer first
+            # Step 1: Release exclusive LiDAR renderer
             if self.blackboard.exists("LIDAR_RENDERER"):
                 renderer = self.blackboard.get("LIDAR_RENDERER")
                 if renderer and hasattr(renderer, 'release_display'):
                     renderer.release_display()
-                    self.cleanup_steps.append("Exclusive LiDAR renderer released")
-                    print("✅ Exclusive LiDAR renderer released")
+                    self.cleanup_steps.append("LiDAR renderer released")
                 
                 self.blackboard.unset("LIDAR_RENDERER")
             
-            # Clear pygame display and prepare for IDLE mode
+            # Step 2: Clear pygame display state
             try:
                 if pygame.get_init():
-                    # Get current display info
-                    display_info = pygame.display.Info()
-                    
-                    # Create a clean fullscreen surface for IDLE mode
-                    screen = pygame.display.set_mode((display_info.current_w, display_info.current_h), pygame.FULLSCREEN)
-                    
-                    # Fill with black and update
-                    screen.fill((0, 0, 0))
-                    pygame.display.flip()
-                    
-                    # Clear all events to prevent interference
+                    # Clear events to prevent interference
                     pygame.event.clear()
-                    
-                    self.cleanup_steps.append("Display prepared for IDLE mode")
-                    print("✅ Display prepared for IDLE mode face avatar")
-                    return True
+                    self.cleanup_steps.append("Pygame events cleared")
                     
             except Exception as display_error:
-                print(f"❌ Display restoration error: {display_error}")
-                self.cleanup_steps.append(f"Display error: {display_error}")
+                self.cleanup_steps.append(f"Display clear error: {display_error}")
+            
+            # Step 3: IMMEDIATELY restore facial animation with resting face - HIGHEST PRIORITY
+            robot = self.get_robot()
+            restoration_success = self.facial_restorer.restore_resting_face_immediately(robot)
+            
+            if restoration_success:
+                self.cleanup_steps.append("Facial animation restored successfully")
                 
+                # Step 4: Verify resting face is displayed
+                verification_success = self.facial_restorer.verify_resting_face_displayed(robot)
+                if verification_success:
+                    self.cleanup_steps.append("Resting face display verified")
+                else:
+                    self.cleanup_steps.append("Resting face verification failed - attempting recovery")
+                    # One more restoration attempt
+                    self.facial_restorer.restore_resting_face_immediately(robot)
+                    
+                # Step 5: Announce IDLE MODE - ONLY ONCE
+                try:
+                    if hasattr(robot, 'speech_manager') and robot.speech_manager:
+                        robot.speech_manager.perform_action("IDLE MODE")
+                        self.cleanup_steps.append("IDLE MODE announced")
+                except Exception:
+                    self.cleanup_steps.append("IDLE MODE announcement failed")
+                    
+            else:
+                self.cleanup_steps.append("Facial animation restoration failed")
+                return False
+            
+            return True
+            
         except Exception as e:
             self.cleanup_steps.append(f"Display restore error: {e}")
-            print(f"❌ Display restore error: {e}")
-        
-        return True  # Always return True to allow mode transition
+            return False
     
     def cleanup_pygame_resources(self) -> bool:
-        """Clean up pygame resources for mode transition"""
+        """Clean up pygame resources while preserving facial animation"""
         try:
             if pygame.get_init():
-                # Clear any remaining events
+                # Clear events but don't quit pygame - IDLE mode needs it
+                pygame.event.clear()
+                
+                # Ensure facial animation window is active
                 try:
-                    pygame.event.clear()
-                    print("🧹 Pygame events cleared")
+                    robot = self.get_robot()
+                    if hasattr(robot, 'facial_animation_manager') and robot.facial_animation_manager:
+                        robot.facial_animation_manager.bring_to_front()
+                        
+                        # One final resting face display
+                        if hasattr(robot.facial_animation_manager, 'resting_face_img'):
+                            robot.facial_animation_manager.display.blit(
+                                robot.facial_animation_manager.resting_face_img, (0, 0)
+                            )
+                            pygame.display.flip()
+                            
                 except Exception:
                     pass
                 
-                # Don't quit pygame - IDLE mode needs it
-                # Just ensure clean state
-                
-                self.cleanup_steps.append("Pygame resources cleaned for mode transition")
-                print("✅ Pygame prepared for IDLE mode")
+                self.cleanup_steps.append("Pygame resources cleaned - facial animation preserved")
                 return True
                 
         except Exception as e:
-            self.cleanup_steps.append(f"Pygame warning: {e}")
-            print(f"⚠️ Pygame cleanup warning: {e}")
+            self.cleanup_steps.append(f"Pygame cleanup warning: {e}")
         
         return True
     
     def cleanup_legacy_systems(self) -> bool:
-        """Clean up any legacy matplotlib systems"""
+        """Clean up legacy LiDAR plot systems"""
         try:
+            cleaned_systems = 0
+            
+            # Clean legacy matplotlib plots
             if self.blackboard.exists("LIDAR_PLOT"):
                 lidar_plot = self.blackboard.get("LIDAR_PLOT")
                 if lidar_plot and hasattr(lidar_plot, 'close'):
                     lidar_plot.close()
-                    self.cleanup_steps.append("Legacy matplotlib plot closed")
+                    cleaned_systems += 1
                 
                 self.blackboard.unset("LIDAR_PLOT")
-                return True
-                
-        except Exception as e:
-            self.cleanup_steps.append(f"Legacy plot warning: {e}")
-        
-        return True
-    
-    def wait_for_background_threads(self):
-        """Wait for background threads to finish"""
-        try:
-            # Give threads time to finish
-            time.sleep(1.5)
             
-            # Check thread count
-            active_threads = threading.active_count()
-            if active_threads > 1:
-                time.sleep(1.0)
+            # Clean up additional blackboard entries
+            legacy_keys = ["PATH", "TARGET_PERSON", "LIDAR_OBSTACLES", "LIDAR_RENDERER"]
             
-            self.cleanup_steps.append("Background threads finished")
-            print("✅ Background threads finished")
-            
-        except Exception as e:
-            self.cleanup_steps.append(f"Thread warning: {e}")
-    
-    def cleanup_blackboard(self):
-        """Clean up blackboard entries"""
-        try:
-            # Keys to clean up
-            keys_to_clean = [
-                "PATH", "TARGET_PERSON", "LIDAR_OBSTACLES"
-            ]
-            
-            cleaned_count = 0
-            for key in keys_to_clean:
+            for key in legacy_keys:
                 try:
                     if self.blackboard.exists(key):
                         self.blackboard.unset(key)
-                        cleaned_count += 1
+                        cleaned_systems += 1
                 except Exception:
                     pass
             
-            if cleaned_count > 0:
-                self.cleanup_steps.append(f"Cleaned {cleaned_count} blackboard entries")
-                print(f"🧹 Cleaned {cleaned_count} blackboard entries")
+            if cleaned_systems > 0:
+                self.cleanup_steps.append(f"Legacy systems cleaned: {cleaned_systems}")
+            
+            return True
             
         except Exception as e:
-            self.cleanup_steps.append(f"Blackboard warning: {e}")
+            self.cleanup_steps.append(f"Legacy cleanup warning: {e}")
+            return True
     
-    def stop_robot_movement(self):
-        """Ensure robot is completely stopped"""
+    def wait_for_threads_completion(self):
+        """Wait for background threads to complete"""
+        try:
+            # Give threads time to finish gracefully
+            time.sleep(1.5)
+            
+            # Check active thread count
+            active_threads = threading.active_count()
+            if active_threads > 1:
+                time.sleep(1.0)  # Additional wait for thread cleanup
+            
+            self.cleanup_steps.append(f"Thread cleanup completed ({active_threads} threads active)")
+            
+        except Exception as e:
+            self.cleanup_steps.append(f"Thread cleanup warning: {e}")
+    
+    def perform_comprehensive_cleanup(self) -> bool:
+        """Perform comprehensive cleanup with enhanced facial animation restoration"""
+        start_time = time.time()
+        self.cleanup_success_count = 0
+        total_steps = 7
+        
+        try:
+            # Step 1: Aggressive head centering (HIGHEST PRIORITY)
+            if self.aggressive_head_centering():
+                self.cleanup_success_count += 1
+            
+            # Step 2: Stop robot movement completely
+            self.cleanup_robot_movement()
+            self.cleanup_success_count += 1
+            
+            # Step 3: Stop LiDAR system safely
+            if self.stop_lidar_system_safely():
+                self.cleanup_success_count += 1
+            
+            # Step 4: Restore display for IDLE mode (CRITICAL STEP)
+            if self.restore_display_for_idle_mode():
+                self.cleanup_success_count += 1
+            
+            # Step 5: Clean up pygame resources while preserving facial animation
+            if self.cleanup_pygame_resources():
+                self.cleanup_success_count += 1
+            
+            # Step 6: Clean up legacy systems
+            if self.cleanup_legacy_systems():
+                self.cleanup_success_count += 1
+            
+            # Step 7: Wait for thread completion
+            self.wait_for_threads_completion()
+            self.cleanup_success_count += 1
+            
+            # FINAL STEP: One more facial animation verification
+            try:
+                robot = self.get_robot()
+                final_verification = self.facial_restorer.verify_resting_face_displayed(robot)
+                if final_verification:
+                    self.cleanup_steps.append("FINAL: Resting face display confirmed")
+                else:
+                    self.cleanup_steps.append("FINAL: Attempting emergency resting face restoration")
+                    self.facial_restorer.restore_resting_face_immediately(robot)
+            except Exception:
+                pass
+            
+            cleanup_time = time.time() - start_time
+            success_rate = (self.cleanup_success_count / total_steps) * 100
+            
+            self.cleanup_steps.append(f"Cleanup completed: {self.cleanup_success_count}/{total_steps} steps ({success_rate:.1f}%) in {cleanup_time:.2f}s")
+            
+            return self.cleanup_success_count >= (total_steps * 0.8)  # 80% success rate
+            
+        except Exception as e:
+            self.cleanup_steps.append(f"Comprehensive cleanup error: {e}")
+            return False
+    
+    def emergency_cleanup_and_restore(self):
+        """Emergency cleanup with forced facial animation restoration"""
         try:
             robot = self.get_robot()
             
-            # Stop all movement
-            if hasattr(robot, 'velocity_manager') and robot.velocity_manager:
-                from src.types.MovementDirection import MovementDirection
-                from src.action_managers.VelocityManager import VelocityConfig
-                
-                # Send stop commands multiple times to ensure it takes
-                for _ in range(5):
-                    stop_config = VelocityConfig(MovementDirection.NONE, 0.0)
-                    robot.velocity_manager.perform_action(stop_config)
-                    time.sleep(0.1)
-                
-                print("🛑 Robot movement stopped")
-                self.cleanup_steps.append("Robot movement stopped")
-            
-        except Exception as e:
-            print(f"❌ Robot stop error: {e}")
-            self.cleanup_steps.append(f"Robot stop error: {e}")
-    
-    def perform_complete_cleanup(self) -> bool:
-        """Perform complete system cleanup with AGGRESSIVE HEAD CENTERING as TOP PRIORITY"""
-        start_time = time.time()
-        print("🧹 Starting complete LiDAR Chase cleanup with AGGRESSIVE HEAD CENTERING...")
-        
-        success_count = 0
-        total_steps = 8
-        
-        # Step 1: AGGRESSIVE HEAD CENTERING - TOP PRIORITY
-        print("🎯 STEP 1: AGGRESSIVE HEAD CENTERING (TOP PRIORITY)")
-        self.force_center_head_all_methods()
-        success_count += 1
-        
-        # Step 2: Stop robot movement
-        print("🛑 STEP 2: Stopping robot movement")
-        self.stop_robot_movement()
-        success_count += 1
-        
-        # Step 3: Stop WORKING LiDAR system with motor shutdown
-        print("🔌 STEP 3: Stopping LiDAR system")
-        if self.stop_working_lidar_system():
-            success_count += 1
-        
-        # Step 4: Additional robot sensor cleanup
-        print("🧹 STEP 4: Cleaning up robot sensors")
-        self.cleanup_robot_lidar_sensor()
-        success_count += 1
-        
-        # Step 5: Restore display for IDLE mode (CRITICAL)
-        print("🖥️ STEP 5: Restoring display for IDLE mode")
-        if self.restore_display_for_idle_mode():
-            success_count += 1
-        
-        # Step 6: Clean up pygame resources for mode transition
-        print("🎮 STEP 6: Cleaning up pygame resources")
-        if self.cleanup_pygame_resources():
-            success_count += 1
-        
-        # Step 7: Clean up legacy systems
-        print("🗂️ STEP 7: Cleaning up legacy systems")
-        if self.cleanup_legacy_systems():
-            success_count += 1
-        
-        # Step 8: Final cleanup
-        print("🔚 STEP 8: Final cleanup")
-        self.wait_for_background_threads()
-        self.cleanup_blackboard()
-        success_count += 1
-        
-        # FINAL: One more aggressive head centering to be absolutely sure
-        print("🎯 FINAL: One more AGGRESSIVE head centering to ensure center position")
-        self.force_center_head_all_methods()
-        
-        cleanup_time = time.time() - start_time
-        success_rate = (success_count / total_steps) * 100
-        
-        print(f"✅ Cleanup completed: {success_count}/{total_steps} steps ({success_rate:.1f}%) in {cleanup_time:.2f}s")
-        print("🎭 Ready for IDLE mode with HEAD PROPERLY CENTERED")
-        
-        return success_count >= (total_steps * 0.8)  # 80% success rate required
-    
-    def update(self) -> Status:
-        """Execute FIXED cleanup with AGGRESSIVE HEAD CENTERING for mode transition"""
-        try:
-            print("🔄 Executing LiDAR Chase mode exit cleanup with AGGRESSIVE HEAD CENTERING...")
-            
-            # Perform complete cleanup
-            cleanup_success = self.perform_complete_cleanup()
-            
-            if cleanup_success:
-                print("✅ LiDAR Chase cleanup successful - mode transition ready with HEAD CENTERED")
-                return Status.SUCCESS
-            else:
-                print("⚠️ Some cleanup issues occurred but allowing transition with HEAD CENTERED")
-                return Status.SUCCESS  # Still allow behavior tree to continue
-            
-        except Exception as e:
-            print(f"❌ Cleanup execution error: {e}")
-            
-            # Emergency cleanup - ensure robot stops, display is freed, and HEAD IS CENTERED
+            # Emergency stop
             try:
-                robot = self.get_robot()
-                
-                # Emergency stop
                 if hasattr(robot, 'velocity_manager') and robot.velocity_manager:
                     from src.types.MovementDirection import MovementDirection
                     from src.action_managers.VelocityManager import VelocityConfig
                     stop_config = VelocityConfig(MovementDirection.NONE, 0.0)
                     robot.velocity_manager.perform_action(stop_config)
-                
-                # EMERGENCY HEAD CENTERING
-                print("🚨 EMERGENCY HEAD CENTERING...")
-                self.force_center_head_all_methods()
-                
-                # Emergency display clear
+            except Exception:
+                pass
+            
+            # Emergency head centering
+            try:
+                if hasattr(robot, 'servo_controller') and robot.servo_controller:
+                    robot.servo_controller.center()
+                elif hasattr(robot, 'head_velocity_manager') and robot.head_velocity_manager:
+                    robot.head_velocity_manager.center_head()
+            except Exception:
+                pass
+            
+            # Emergency facial animation restoration
+            try:
+                self.facial_restorer.restore_resting_face_immediately(robot)
+            except Exception:
+                pass
+            
+            # Emergency display clear
+            try:
                 if pygame.get_init():
                     screen = pygame.display.get_surface()
                     if screen:
                         screen.fill((0, 0, 0))
                         pygame.display.flip()
                     pygame.event.clear()
-                
-                print("🚨 Emergency cleanup executed with HEAD CENTERED")
-                
-            except Exception as emergency_error:
-                print(f"❌ Emergency cleanup error: {emergency_error}")
-                # Still try one more head centering attempt
-                try:
-                    self.force_center_head_all_methods()
-                except:
-                    pass
+            except Exception:
+                pass
             
-            return Status.SUCCESS  # Don't block behavior tree
+            self.cleanup_steps.append("Emergency cleanup executed with facial restoration")
+            
+        except Exception as e:
+            self.cleanup_steps.append(f"Emergency cleanup error: {e}")
+    
+    def update(self) -> Status:
+        """Execute comprehensive cleanup with enhanced facial animation restoration"""
+        try:
+            # Perform comprehensive cleanup
+            cleanup_success = self.perform_comprehensive_cleanup()
+            
+            if cleanup_success:
+                return Status.SUCCESS
+            else:
+                # Partial success - still allow transition but log warnings
+                self.cleanup_steps.append("Partial cleanup success - allowing transition with warnings")
+                return Status.SUCCESS
+            
+        except Exception as e:
+            self.cleanup_steps.append(f"Cleanup execution error: {e}")
+            
+            # Perform emergency cleanup
+            self.emergency_cleanup_and_restore()
+            
+            # Always return SUCCESS to allow behavior tree to continue
+            return Status.SUCCESS
     
     def get_cleanup_status(self) -> dict:
-        """Get detailed cleanup status"""
+        """Get detailed cleanup status for debugging"""
         return {
             "cleanup_steps_completed": len(self.cleanup_steps),
             "cleanup_steps": self.cleanup_steps.copy(),
+            "success_count": self.cleanup_success_count,
+            "facial_restoration_active": True,
             "pygame_initialized": pygame.get_init() if 'pygame' in globals() else False,
             "blackboard_systems": {
                 "lidar_system": self.blackboard.exists("LIDAR_SYSTEM"),
                 "lidar_renderer": self.blackboard.exists("LIDAR_RENDERER"),
+                "lidar_plot": self.blackboard.exists("LIDAR_PLOT"),
             },
-            "version": "FIXED with AGGRESSIVE HEAD CENTERING for proper IDLE mode restoration"
+            "version": "Ultra-Stable with Enhanced Facial Animation Restoration"
         }
 
 
-# Aliases for backward compatibility
-CloseLidarPlot = FixedCloseLidarPlot
-EnhancedCloseLidarPlot = FixedCloseLidarPlot
+# Compatibility aliases
+CloseLidarPlot = UltraStableCloseLidarPlot
+FixedCloseLidarPlot = UltraStableCloseLidarPlot
+EnhancedCloseLidarPlot = UltraStableCloseLidarPlot

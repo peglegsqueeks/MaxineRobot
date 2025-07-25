@@ -23,6 +23,7 @@ def make_idle_mode_sub_tree():
         KeyboardKey.D: RobotMode.DIAGNOSTIC,
         KeyboardKey.G: RobotMode.PLAYGAME,
         KeyboardKey.T: RobotMode.LIDAR_TEST,
+        KeyboardKey.U: RobotMode.HEAD_ALIGN,
     }
     
     # build behavior to switch to each mode

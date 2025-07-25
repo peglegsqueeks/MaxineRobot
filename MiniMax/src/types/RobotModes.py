@@ -37,5 +37,6 @@ class RobotMode(Enum):
 
     # Test Lidar Mode
     LIDAR_TEST = 9
-    
-    
+
+    # Head Align Mode
+    HEAD_ALIGN = 10

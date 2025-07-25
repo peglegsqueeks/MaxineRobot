@@ -19,15 +19,17 @@ class FacialAnimationManager(ActionManager[FacialAnimation]):
     def __init__(self) -> None:
         """
         Initialises the manager
-
-        arguments:
-            - display: the pygram display object
         """
         super().__init__("Facial Animation Manager")
+        
+        # Get screen resolution for dynamic scaling
+        pygame.init()
+        display_info = pygame.display.Info()
+        self.screen_width = display_info.current_w
+        self.screen_height = display_info.current_h
+        
         self.resting_face_img = self.load_default_face()
-        self.resting_face_img =pygame.transform.scale(self.resting_face_img,(1920, 1080))    
-                
-           
+        self.resting_face_img = pygame.transform.scale(self.resting_face_img, (self.screen_width, self.screen_height))    
         
         self.open_window()
         # show resting face
@@ -56,8 +58,8 @@ class FacialAnimationManager(ActionManager[FacialAnimation]):
             # Set window position environment variable for future windows
             os.environ['SDL_VIDEO_WINDOW_POS'] = '0,0'
             
-        except Exception as e:
-            print(f"Warning: Could not bring pygame window to front: {e}")
+        except Exception:
+            pass
 
     def open_window(self):
         # Set pygame window to stay on top and position it
@@ -90,7 +92,7 @@ class FacialAnimationManager(ActionManager[FacialAnimation]):
 
         # run animation
         for image in animation_images:
-            image =pygame.transform.scale(image, (1920, 1080)) 
+            image = pygame.transform.scale(image, (self.screen_width, self.screen_height)) 
             self.display.blit(image, (0, 0))
             pygame.display.flip()
             # time.sleep(0.01)

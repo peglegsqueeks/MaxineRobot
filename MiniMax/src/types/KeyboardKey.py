@@ -32,10 +32,7 @@ class KeyboardKey(Enum):
     H = pygame.K_h
     G = pygame.K_g
     T = pygame.K_t
+    U = pygame.K_u
     
     Plus = pygame.K_EQUALS
     Minus = pygame.K_MINUS
-    
-    
-
-

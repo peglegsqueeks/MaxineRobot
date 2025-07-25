@@ -4,6 +4,7 @@ from py_trees.trees import BehaviourTree
 from src.behaviors.game_mode import make_game_sub_tree
 from src.behaviors.diagnostic_mode import make_diagnostic_sub_tree
 from src.behaviors.lidarchase import make_lidar_chase_sub_tree
+from src.behaviors.head_align import make_head_align_sub_tree
 from src.multithreading import graceful_thread_exit
 from src.behaviors.MaxineBehavior import ROBOT_BLACKBOARD, ROBOT_KEY
 from src.behaviors.utils import make_mode_sub_tree
@@ -142,6 +143,7 @@ def build_robot_behavior_tree() -> BehaviourTree:
         RobotMode.DIAGNOSTIC: make_diagnostic_sub_tree(),
         RobotMode.PLAYGAME: make_game_sub_tree(),
         RobotMode.LIDAR_TEST: make_lidar_test_sub_tree(),
+        RobotMode.HEAD_ALIGN: make_head_align_sub_tree(),
     }
 
     sub_trees = []

@@ -24,6 +24,7 @@ class SetRobotMode(MaxineBehavior):
         RobotMode.DIAGNOSTIC: CameraMode.DISABLED,
         RobotMode.PLAYGAME: CameraMode.DISABLED,
         RobotMode.LIDAR_TEST: CameraMode.OBJECT_DETECTION,
+        RobotMode.HEAD_ALIGN: CameraMode.DISABLED,
     }
 
     MODE_SAYING = {
@@ -37,6 +38,7 @@ class SetRobotMode(MaxineBehavior):
         RobotMode.DIAGNOSTIC: "Diagnostic",
         RobotMode.PLAYGAME: "Play Game",
         RobotMode.LIDAR_TEST: "Test Lidar",
+        RobotMode.HEAD_ALIGN: "HEAD ALIGN",
     }
 
     def __init__(self, mode: RobotMode):

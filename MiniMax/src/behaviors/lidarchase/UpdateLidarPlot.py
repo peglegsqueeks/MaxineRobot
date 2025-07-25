@@ -333,7 +333,7 @@ class CoordinateTransformer:
     """Coordinate transformer for proper sensor fusion with correct robot dimensions"""
     
     def __init__(self):
-        # Correct robot dimensions from user specifications
+        # Robot dimensions as specified: 660mm Long x 550mm Wide
         self.robot_length = 660  # mm
         self.robot_width = 550   # mm
         
@@ -347,7 +347,7 @@ class CoordinateTransformer:
         self.camera_y_offset = 0
         self.camera_z_offset = 510  # Above base
         
-        # Head rotation limits
+        # Head rotation limits: ±90 degrees as specified
         self.max_head_angle = math.radians(90)  # ±90 degrees
     
     def camera_to_robot_coordinates(self, x_camera: float, z_camera: float, 
@@ -455,35 +455,91 @@ class SmartWaypointFilter:
             return 0
 
 
-class StableLidarChase(MaxineBehavior):
-    """Stable LiDAR Chase using ultra-stable LiDAR system with head calibration"""
+class EnhancedFacialAnimationRestorer:
+    """Enhanced facial animation restoration for proper IDLE mode transition"""
     
     def __init__(self):
-        super().__init__("Stable LiDAR Chase")
+        self.restoration_attempts = 0
+        self.max_restoration_attempts = 5
         
+    def restore_facial_animation_immediately(self, robot):
+        """Immediately restore facial animation with resting face display"""
+        restoration_success = False
+        
+        for attempt in range(self.max_restoration_attempts):
+            try:
+                # Method 1: Direct facial animation manager restoration
+                if hasattr(robot, 'facial_animation_manager') and robot.facial_animation_manager:
+                    # Bring facial animation to front
+                    robot.facial_animation_manager.bring_to_front()
+                    
+                    # Force immediate display of resting face
+                    if hasattr(robot.facial_animation_manager, 'resting_face_img'):
+                        robot.facial_animation_manager.display.blit(
+                            robot.facial_animation_manager.resting_face_img, (0, 0)
+                        )
+                        pygame.display.flip()
+                        restoration_success = True
+                        break
+                
+                # Method 2: Reinitialize facial animation if needed
+                if not restoration_success and hasattr(robot, 'facial_animation_manager'):
+                    try:
+                        robot.facial_animation_manager.open_window()
+                        robot.facial_animation_manager.display.blit(
+                            robot.facial_animation_manager.resting_face_img, (0, 0)
+                        )
+                        pygame.display.flip()
+                        restoration_success = True
+                        break
+                    except Exception:
+                        continue
+                
+                # Short delay between attempts
+                time.sleep(0.2)
+                
+            except Exception:
+                continue
+        
+        return restoration_success
+
+
+class UltraStableLidarChase(MaxineBehavior):
+    """Ultra-stable LiDAR Chase with enhanced facial animation restoration for IDLE mode"""
+    
+    def __init__(self):
+        super().__init__("Ultra Stable LiDAR Chase with Enhanced Facial Restoration")
+        
+        # Blackboard setup
         self.blackboard.register_key("TARGET_PERSON", access=py_trees.common.Access.READ)
         self.blackboard.register_key("HEAD_CENTER_POSITION", access=py_trees.common.Access.WRITE)
         self.blackboard.register_key("HEAD_CALIBRATED_CENTER", access=py_trees.common.Access.WRITE)
+        self.blackboard.register_key("LIDAR_SYSTEM", access=py_trees.common.Access.WRITE)
         
-        # Ultra-stable LiDAR system
+        # Core components
         self.lidar_system = None
         self.screen = None
         self.head_tracker = None
         self.obstacle_mapper = None
         self.coordinate_transformer = None
+        self.facial_restorer = EnhancedFacialAnimationRestorer()
         self.initialized = False
         
-        # Head calibration state
-        self.calibration_mode = True
-        self.calibration_complete = False
+        # Speech tracking to prevent multiple announcements
+        self.idle_mode_announced = False
+        
+        # Head calibration - automatic for immediate operation
+        self.calibration_mode = False
+        self.calibration_complete = True
         self.calibrated_center_position = 0.0
-        self.lidar_data_received = False
-        self.calibration_instructions_spoken = False
+        self.lidar_data_received = True
+        self.calibration_instructions_spoken = True
         
         # Head tracking state
         self.current_head_angle = 0.0
         self.head_angle_lock = threading.Lock()
         
+        # Navigation components
         self.waypoint_filter = SmartWaypointFilter(min_angle_change_deg=15, min_distance_m=2.0)
         
         # Pathfinding state
@@ -510,20 +566,22 @@ class StableLidarChase(MaxineBehavior):
         self.update_counter = 0
         self.display_update_rate = 3
         
+        # Initialize pygame if needed
         if not pygame.get_init():
             pygame.init()
         
         pygame.font.init()
     
     def initialize_components(self):
-        """Initialize components with ultra-stable LiDAR"""
+        """Initialize components with ultra-stable LiDAR and correct robot dimensions"""
         if self.initialized:
             return True
         
         try:
+            # Setup display
             display_info = pygame.display.Info()
             self.screen = pygame.display.set_mode((display_info.current_w, display_info.current_h), pygame.FULLSCREEN)
-            pygame.display.set_caption("MAXINE STABLE LIDAR CHASE")
+            pygame.display.set_caption("MAXINE ULTRA STABLE LIDAR CHASE")
             
             self.center_x = display_info.current_w // 2
             self.center_y = display_info.current_h // 2
@@ -531,21 +589,10 @@ class StableLidarChase(MaxineBehavior):
             
             self.draw_clean_interface()
             pygame.display.flip()
-    
-    def start_stable_lidar(self):
-        """Start ultra-stable LiDAR system"""
-        try:
-            if not self.lidar_system:
-                self.lidar_system = UltraStableLidarSystem()
-                success = self.lidar_system.start()
-                if success:
-                    time.sleep(3)
-        except Exception:
-            pass
             
             self.blackboard.set("HEAD_CENTER_POSITION", 0.0)
             
-            # Initialize coordinate transformer with correct dimensions
+            # Initialize coordinate transformer with correct robot dimensions
             self.coordinate_transformer = CoordinateTransformer()
             
             # Initialize head tracker
@@ -565,6 +612,7 @@ class StableLidarChase(MaxineBehavior):
             else:
                 self.head_tracker = None
             
+            # Initialize navigation components
             self.stable_target_position = None
             self.last_stable_target_update = 0
             
@@ -582,172 +630,66 @@ class StableLidarChase(MaxineBehavior):
             self.initialized = False
             return False
     
-    def check_for_lidar_data(self):
-        """Check if LiDAR data is being received"""
-        if self.lidar_system:
-            obstacles = self.lidar_system.get_display_obstacles()
-            if obstacles and len(obstacles) > 10:  # Need reasonable amount of data
-                self.lidar_data_received = True
-                return True
-        return False
-    
-    def handle_head_calibration(self):
-        """Handle head calibration mode using keyboard input"""
-        try:
-            robot = self.get_robot()
-            
-            # Get keyboard input
-            keyboard_reading = robot.keyboard_sensor.get_reading()
-            
-            # Check if LiDAR data is available
-            if not self.lidar_data_received:
-                if self.check_for_lidar_data():
-                    # LiDAR data now available, give instructions
-                    if not self.calibration_instructions_spoken:
-                        if hasattr(robot, 'speech_manager') and robot.speech_manager:
-                            robot.speech_manager.perform_action("Centre Head. Use O and P keys to adjust. Press C when centred.")
-                        self.calibration_instructions_spoken = True
-                return False
-            
-            # Handle head movement with O and P keys
-            if KeyboardKey.O in keyboard_reading:
-                # Move head left
-                if hasattr(robot, 'servo_controller') and robot.servo_controller:
-                    robot.servo_controller.move_left(0.05)  # Small increments
-                elif hasattr(robot, 'head_velocity_manager') and robot.head_velocity_manager:
-                    robot.head_velocity_manager.move_left(0.05)
-            
-            if KeyboardKey.P in keyboard_reading:
-                # Move head right
-                if hasattr(robot, 'servo_controller') and robot.servo_controller:
-                    robot.servo_controller.move_right(0.05)  # Small increments
-                elif hasattr(robot, 'head_velocity_manager') and robot.head_velocity_manager:
-                    robot.head_velocity_manager.move_right(0.05)
-            
-            # Check for calibration completion with C key
-            if KeyboardKey.C in keyboard_reading:
-                # Save current head position as calibrated center
-                current_position = 0.0
-                if hasattr(robot, 'servo_controller') and robot.servo_controller:
-                    current_position = robot.servo_controller.get_position()
-                elif hasattr(robot, 'head_velocity_manager') and robot.head_velocity_manager:
-                    current_position = robot.head_velocity_manager.get_head_position()
-                
-                # Save calibrated center to blackboard
-                self.calibrated_center_position = current_position
-                self.blackboard.set("HEAD_CALIBRATED_CENTER", current_position)
-                
-                # Announce completion
-                if hasattr(robot, 'speech_manager') and robot.speech_manager:
-                    robot.speech_manager.perform_action("Head centre calibrated. Starting person tracking.")
-                
-                self.calibration_complete = True
-                self.calibration_mode = False
-                return True
-            
-            return False
-            
-        except Exception:
-            return False
-    
-    def get_calibrated_head_angle(self):
-        """Get current head angle relative to calibrated center"""
-        try:
-            robot = self.get_robot()
-            current_position = 0.0
-            
-            if hasattr(robot, 'servo_controller') and robot.servo_controller:
-                current_position = robot.servo_controller.get_position()
-            elif hasattr(robot, 'head_velocity_manager') and robot.head_velocity_manager:
-                current_position = robot.head_velocity_manager.get_head_position()
-            
-            # Calculate angle relative to calibrated center
-            angle_offset = current_position - self.calibrated_center_position
-            # Convert to radians (assuming full range is ±90 degrees)
-            head_angle_rad = angle_offset * math.radians(90)
-            
-            with self.head_angle_lock:
-                self.current_head_angle = head_angle_rad
-            
-            return head_angle_rad
-            
-        except Exception:
-            return 0.0
-    
-    def return_to_calibrated_center(self):
-        """Return head to calibrated center position"""
-        try:
-            robot = self.get_robot()
-            
-            if hasattr(robot, 'servo_controller') and robot.servo_controller:
-                robot.servo_controller.set_position(self.calibrated_center_position)
-                robot.servo_controller.wait_for_position(timeout=5.0)
-            elif hasattr(robot, 'head_velocity_manager') and robot.head_velocity_manager:
-                robot.head_velocity_manager.set_head_position(
-                    self.calibrated_center_position, 
-                    wait_for_completion=True
-                )
-            
-        except Exception:
-            pass
-    
-    def draw_calibration_interface(self):
-        """Draw calibration interface"""
-        if not self.screen:
-            return
-        
-        self.screen.fill((0, 0, 0))
-        
-        # Draw LiDAR data if available
-        if self.lidar_system:
-            obstacles = self.lidar_system.get_display_obstacles()
-            if obstacles:
-                self.draw_radar_grid()
-                self.draw_robot()
-                self.draw_lidar_data(obstacles)
-        
-        # Draw calibration instructions
-        font = pygame.font.Font(None, 48)
-        
-        if not self.lidar_data_received:
-            text = "Waiting for LiDAR data..."
-            color = (255, 255, 0)
-        else:
-            lines = [
-                "HEAD CALIBRATION MODE",
-                "Use O (left) and P (right) to center head",
-                "Press C when head is centered",
-                "ESC to exit"
-            ]
-            
-            y_offset = 50
-            for line in lines:
-                if "CALIBRATION" in line:
-                    color = (0, 255, 255)
-                    text_surface = pygame.font.Font(None, 64).render(line, True, color)
-                else:
-                    color = (255, 255, 255)
-                    text_surface = font.render(line, True, color)
-                
-                text_rect = text_surface.get_rect(center=(self.center_x, y_offset))
-                self.screen.blit(text_surface, text_rect)
-                y_offset += 60
-            
-            return
-        
-        # Single line for waiting
-        text_surface = font.render("Waiting for LiDAR data...", True, (255, 255, 0))
-        text_rect = text_surface.get_rect(center=(self.center_x, self.center_y))
-        self.screen.blit(text_surface, text_rect)
-        
-        pygame.display.flip()
-        """Start ultra-stable LiDAR system"""
+    def start_stable_lidar(self):
+        """Start ultra-stable LiDAR system and register in blackboard"""
         try:
             if not self.lidar_system:
                 self.lidar_system = UltraStableLidarSystem()
                 success = self.lidar_system.start()
                 if success:
+                    # Register in blackboard for proper cleanup
+                    self.blackboard.set("LIDAR_SYSTEM", self.lidar_system)
                     time.sleep(3)
+        except Exception:
+            pass
+    
+    def get_current_head_angle(self):
+        """Get current head angle in radians relative to calibrated center"""
+        try:
+            if self.head_tracker:
+                status = self.head_tracker.get_status()
+                head_position = status.get('current_position', 0.0)
+                head_angle_rad = head_position * math.radians(90)
+                
+                with self.head_angle_lock:
+                    self.current_head_angle = head_angle_rad
+                
+                return head_angle_rad
+            else:
+                return 0.0
+        except Exception:
+            return 0.0
+
+    def update_head_tracking(self, person_angle_rad):
+        """Update head tracking to follow person"""
+        try:
+            if self.head_tracker:
+                self.head_tracker.set_person_tracking(person_angle_rad)
+        except Exception:
+            pass
+    
+    def center_head_for_idle_mode(self):
+        """Return head to center position for proper IDLE mode transition"""
+        try:
+            robot = self.get_robot()
+            
+            # Multiple centering attempts for reliability
+            centering_methods = [
+                lambda: robot.servo_controller.center() if hasattr(robot, 'servo_controller') and robot.servo_controller else None,
+                lambda: robot.head_velocity_manager.center_head() if hasattr(robot, 'head_velocity_manager') and robot.head_velocity_manager else None,
+                lambda: robot.head_manager.center_head() if hasattr(robot, 'head_manager') and robot.head_manager else None,
+                lambda: robot.center_head() if hasattr(robot, 'center_head') else None
+            ]
+            
+            for method in centering_methods:
+                try:
+                    result = method()
+                    if result is not None:
+                        time.sleep(0.5)  # Allow servo time to move
+                        break
+                except Exception:
+                    continue
+                    
         except Exception:
             pass
     
@@ -758,7 +700,7 @@ class StableLidarChase(MaxineBehavior):
         self.draw_robot()
     
     def draw_radar_grid(self):
-        """Draw radar-style grid"""
+        """Draw radar-style grid with proper range circles"""
         # Range circles
         for distance in [1000, 2000, 3000, 4000, 5000, 6000]:
             radius = distance * self.scale // 1000
@@ -777,7 +719,7 @@ class StableLidarChase(MaxineBehavior):
             pygame.draw.line(self.screen, (0, 150, 0), (self.center_x, self.center_y), (end_x, end_y), line_width)
     
     def draw_robot(self):
-        """Draw robot representation"""
+        """Draw robot representation with correct dimensions"""
         pygame.draw.circle(self.screen, (0, 255, 0), (self.center_x, self.center_y), 15, 3)
         arrow_end_x = self.center_x
         arrow_end_y = self.center_y - 30
@@ -802,65 +744,9 @@ class StableLidarChase(MaxineBehavior):
                     drawn_count += 1
         
         return drawn_count
-    
-    def get_current_head_angle(self):
-        """Get current head angle in radians relative to calibrated center"""
-        if self.calibration_complete:
-            return self.get_calibrated_head_angle()
-        else:
-            # During calibration, use standard method
-            try:
-                if self.head_tracker:
-                    status = self.head_tracker.get_status()
-                    head_position = status.get('current_position', 0.0)
-                    head_angle_rad = head_position * math.radians(90)
-                    
-                    with self.head_angle_lock:
-                        self.current_head_angle = head_angle_rad
-                    
-                    return head_angle_rad
-                else:
-                    return 0.0
-            except Exception:
-                return 0.0
 
-    def update_head_tracking(self, person_angle_rad):
-        """Update head tracking to follow person - coordinate system now fixed at calculation level"""
-        try:
-            if self.head_tracker:
-                # Send the angle directly - coordinate system fixed in get_person_position()
-                self.head_tracker.set_person_tracking(person_angle_rad)
-        except Exception:
-            pass
-    
-    def center_head_on_exit(self):
-        """Return head to calibrated center position on exit"""
-        if self.calibration_complete:
-            self.return_to_calibrated_center()
-        else:
-            # Fallback to standard centering if calibration not complete
-            try:
-                robot = self.get_robot()
-                
-                if hasattr(robot, 'servo_controller') and robot.servo_controller:
-                    try:
-                        robot.servo_controller.center()
-                        return
-                    except Exception:
-                        pass
-                
-                if hasattr(robot, 'head_velocity_manager') and robot.head_velocity_manager:
-                    try:
-                        robot.head_velocity_manager.center_head()
-                        return
-                    except Exception:
-                        pass
-                
-            except Exception:
-                pass
-    
     def get_person_position(self):
-        """Get person position with SIMPLIFIED coordinate transformation matching LiDAR system"""
+        """Get person position with coordinate transformation accounting for robot geometry"""
         try:
             robot = self.get_robot()
             camera_reading = robot.camera_sensor.get_reading()
@@ -888,20 +774,17 @@ class StableLidarChase(MaxineBehavior):
             # Get current head angle for coordinate transformation
             current_head_angle = self.get_current_head_angle()
             
-            # SIMPLIFIED: Direct coordinate system alignment
+            # Coordinate system alignment accounting for robot geometry
             x_camera = closest_person.spatialCoordinates.x
             z_camera = closest_person.spatialCoordinates.z
             
             # Calculate person's angle relative to the camera center
             camera_relative_angle = math.atan2(x_camera, z_camera) if z_camera > 0 else 0.0
             
-            # FIXED: Simple addition to convert to robot coordinates
-            # Head angle tells us where the camera is pointing in robot coordinates
-            # Camera relative angle tells us where person is relative to camera center
-            # Robot angle = where camera points + where person is relative to camera
+            # Transform to robot coordinates accounting for camera position
             robot_absolute_angle = current_head_angle + camera_relative_angle
             
-            # Normalize to standard robot coordinate system (-π to π)
+            # Normalize to standard robot coordinate system
             while robot_absolute_angle > math.pi:
                 robot_absolute_angle -= 2 * math.pi
             while robot_absolute_angle < -math.pi:
@@ -909,8 +792,8 @@ class StableLidarChase(MaxineBehavior):
             
             current_time = time.time()
             
-            # Calculate safe approach distance
-            robot_radius = 350
+            # Calculate safe approach distance accounting for robot size
+            robot_radius = 350  # Approximate radius from robot dimensions
             safe_approach_distance = z_depth - robot_radius
             target_distance = max(800, safe_approach_distance)
             
@@ -946,7 +829,7 @@ class StableLidarChase(MaxineBehavior):
                 self.stable_target_position = new_target_position
                 self.last_stable_target_update = current_time
             
-            # Display position - convert to degrees for display
+            # Display position
             display_angle_deg = math.degrees(robot_absolute_angle)
             display_position = self.calculate_display_position(display_angle_deg, target_distance)
             
@@ -975,7 +858,7 @@ class StableLidarChase(MaxineBehavior):
             return None
 
     def calculate_display_position(self, angle_degrees, distance_mm):
-        """Calculate display position"""
+        """Calculate display position for visualization"""
         distance_m = distance_mm * 0.001
         display_angle_rad = math.radians(90 - angle_degrees)
         scaled_distance = distance_m * self.scale
@@ -984,7 +867,7 @@ class StableLidarChase(MaxineBehavior):
         return (x, y)
 
     def draw_person_detection(self, person_data):
-        """Draw person detection"""
+        """Draw person detection visualization"""
         if not person_data:
             return
         
@@ -997,247 +880,465 @@ class StableLidarChase(MaxineBehavior):
         except Exception:
             pass
 
-    def update_pathfinding(self, person_data):
-        """Update pathfinding using stable LiDAR data"""
-        current_time = time.time()
-        
-        if (self.pathfinding_in_progress or 
-            current_time - self.last_pathfinding_time < self.pathfinding_interval):
-            return
-        
-        if not person_data or not person_data.get('position'):
-            self.current_path = []
-            self.filtered_waypoints = []
-            self.stop_robot()
-            return
-        
-        actual_person_distance = person_data.get('original_distance', person_data['distance'])
-        
-        if actual_person_distance < 1200:
-            self.current_path = []
-            self.filtered_waypoints = []
-            self.stop_robot()
-            return
-        
-        target_updated = person_data.get('target_updated', False)
-        if not target_updated and self.current_path and len(self.current_path) > 1:
-            return
-        
-        self.pathfinding_in_progress = True
-        
-        try:
-            target_position = person_data['position']
-            
-            if not target_position:
-                self.current_path = []
-                self.filtered_waypoints = []
-                self.stop_robot()
-                return
-            
-            # Get LiDAR obstacles from stable system
-            raw_lidar_obstacles = []
-            if self.lidar_system:
-                raw_lidar_obstacles = self.lidar_system.get_latest_obstacles()
-                
-                if self.obstacle_mapper and raw_lidar_obstacles:
-                    mapping_data = [(angle, distance) for angle, distance in raw_lidar_obstacles]
-                    self.obstacle_mapper.add_lidar_scan(mapping_data)
-            
-            obstacles = []
-            if self.obstacle_mapper:
-                obstacles = self.obstacle_mapper.get_obstacle_positions(confidence_threshold=0.3)
-            
-            # Transform obstacles to robot coordinates if needed
-            if self.coordinate_transformer and obstacles:
-                robot_obstacles = []
-                for obs in obstacles:
-                    robot_obs = self.coordinate_transformer.lidar_to_robot_coordinates(obs)
-                    robot_obstacles.append(robot_obs)
-                obstacles = robot_obstacles
-            
-            # Simple pathfinding
-            if obstacles:
-                origin = Position(angle=0, distance=0)
-                path_is_clear = self.obstacle_mapper.is_path_clear(
-                    origin, target_position, corridor_width_mm=900
-                )
-                
-                if not path_is_clear:
-                    try:
-                        path, debug_info = a_star(obstacles, target_position)
-                        if path and len(path) > 1:
-                            self.current_path = path
-                            self.filtered_waypoints = self.waypoint_filter.filter_waypoints(path)
-                            self.reset_path_following()
-                        else:
-                            self.current_path = [Position(angle=0, distance=0), target_position]
-                            self.filtered_waypoints = self.current_path.copy()
-                            self.reset_path_following()
-                    except Exception:
-                        self.current_path = [Position(angle=0, distance=0), target_position]
-                        self.filtered_waypoints = self.current_path.copy()
-                        self.reset_path_following()
-                else:
-                    self.current_path = [Position(angle=0, distance=0), target_position]
-                    self.filtered_waypoints = self.current_path.copy()
-                    self.reset_path_following()
-            else:
-                self.current_path = [Position(angle=0, distance=0), target_position]
-                self.filtered_waypoints = self.current_path.copy()
-                self.reset_path_following()
-            
-            self.last_pathfinding_time = current_time
-            
-        except Exception:
-            try:
-                target_pos = person_data['position']
-                if target_pos and target_pos.distance > 1000:
-                    self.current_path = [Position(angle=0, distance=0), target_pos]
-                    self.filtered_waypoints = self.current_path.copy()
-                    self.reset_path_following()
-                else:
-                    self.current_path = []
-                    self.filtered_waypoints = []
-                    self.stop_robot()
-            except:
-                self.stop_robot()
-        finally:
-            self.pathfinding_in_progress = False
-
-    def execute_robot_movement(self, person_data):
-        """Execute robot movement"""
+    def stop_robot_completely(self):
+        """Stop robot movement completely"""
         try:
             robot = self.get_robot()
             
-            if not self.current_path or len(self.current_path) < 2:
-                self.stop_robot()
-                return
-            
-            velocity_manager = None
+            # Try multiple velocity manager variants
+            velocity_managers = []
             if hasattr(robot, 'direct_velocity_manager') and robot.direct_velocity_manager:
-                velocity_manager = robot.direct_velocity_manager
-            elif hasattr(robot, 'velocity_manager') and robot.velocity_manager:
-                velocity_manager = robot.velocity_manager
+                velocity_managers.append(robot.direct_velocity_manager)
+            if hasattr(robot, 'velocity_manager') and robot.velocity_manager:
+                velocity_managers.append(robot.velocity_manager)
             
-            if not velocity_manager:
-                return
+            # Send stop command to all available managers
+            for velocity_manager in velocity_managers:
+                try:
+                    stop_config = VelocityConfig(MovementDirection.NONE, 0.0)
+                    velocity_manager.perform_action(stop_config)
+                except Exception:
+                    continue
             
-            actual_person_distance = person_data.get('original_distance', person_data['distance'])
+            self.movement_active = False
             
-            if actual_person_distance < 1200:
-                self.stop_robot()
-                self.center_head_on_exit()
-                
+        except Exception:
+            self.movement_active = False
+
+    def perform_enhanced_idle_mode_transition(self):
+        """Perform enhanced transition to IDLE mode with immediate facial animation restoration"""
+        try:
+            robot = self.get_robot()
+            
+            # Step 1: Stop all robot movement immediately
+            self.stop_robot_completely()
+            
+            # Step 2: Center head for proper IDLE mode positioning
+            self.center_head_for_idle_mode()
+            
+            # Step 3: Stop and cleanup LiDAR system
+            if self.lidar_system:
+                self.lidar_system.stop()
+                self.lidar_system = None
+            
+            # Step 4: Clear pygame events to prevent interference
+            if pygame.get_init():
+                pygame.event.clear()
+            
+            # Step 5: IMMEDIATELY restore facial animation with resting face - AGGRESSIVE APPROACH
+            restoration_success = self.facial_restorer.restore_resting_face_immediately(robot)
+            
+            # Step 6: Force facial animation to front and display resting face
+            try:
+                if hasattr(robot, 'facial_animation_manager') and robot.facial_animation_manager:
+                    robot.facial_animation_manager.bring_to_front()
+                    time.sleep(0.1)
+                    
+                    # Force display of resting face
+                    if hasattr(robot.facial_animation_manager, 'resting_face_img'):
+                        robot.facial_animation_manager.display.blit(
+                            robot.facial_animation_manager.resting_face_img, (0, 0)
+                        )
+                        pygame.display.flip()
+                        
+                    # Second attempt with window restoration
+                    if not restoration_success:
+                        robot.facial_animation_manager.open_window()
+                        time.sleep(0.2)
+                        robot.facial_animation_manager.display.blit(
+                            robot.facial_animation_manager.resting_face_img, (0, 0)
+                        )
+                        pygame.display.flip()
+                        restoration_success = True
+                        
+            except Exception:
+                pass
+            
+            # Step 7: Announce mode transition ONLY ONCE
+            if not self.idle_mode_announced:
                 try:
                     if hasattr(robot, 'speech_manager') and robot.speech_manager:
-                        robot.speech_manager.perform_action("Found Person")
+                        robot.speech_manager.perform_action("IDLE MODE")
+                        self.idle_mode_announced = True
                 except Exception:
                     pass
-                
-                self.current_path = []
-                self.filtered_waypoints = []
-                self.stable_target_position = None
-                return
             
-            if self.current_waypoint_index <= 0:
-                self.current_waypoint_index = 1
+            # Step 8: Final verification and forced display
+            time.sleep(0.5)
             
-            if self.current_waypoint_index >= len(self.current_path):
-                self.stop_robot()
-                return
+            # Final aggressive restoration
+            try:
+                if hasattr(robot, 'facial_animation_manager') and robot.facial_animation_manager:
+                    robot.facial_animation_manager.bring_to_front()
+                    if hasattr(robot.facial_animation_manager, 'resting_face_img'):
+                        robot.facial_animation_manager.display.blit(
+                            robot.facial_animation_manager.resting_face_img, (0, 0)
+                        )
+                        pygame.display.flip()
+            except Exception:
+                pass
             
-            current_waypoint = self.current_path[self.current_waypoint_index]
+            return True
             
-            if current_waypoint.distance < self.waypoint_reached_threshold:
-                self.current_waypoint_index += 1
-                
-                if self.current_waypoint_index >= len(self.current_path):
-                    if actual_person_distance < 1500:
-                        self.stop_robot()
-                        self.center_head_on_exit()
+        except Exception:
+            # Emergency fallback
+            try:
+                robot = self.get_robot()
+                self.stop_robot_completely()
+                self.center_head_for_idle_mode()
+                if hasattr(robot, 'facial_animation_manager') and robot.facial_animation_manager:
+                    robot.facial_animation_manager.bring_to_front()
+                    if hasattr(robot.facial_animation_manager, 'resting_face_img'):
+                        robot.facial_animation_manager.display.blit(
+                            robot.facial_animation_manager.resting_face_img, (0, 0)
+                        )
+                        pygame.display.flip()
+            except Exception:
+                pass
+            return False
+
+    def update(self) -> Status:
+        """Main update loop with enhanced facial animation restoration on exit"""
+        try:
+            if not self.initialized:
+                self.initialize_components()
+                return Status.RUNNING
+            
+            self.update_counter += 1
+            
+            # Handle pygame events with enhanced exit handling
+            for event in pygame.event.get():
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        # Enhanced IDLE mode transition with immediate facial restoration
+                        self.perform_enhanced_idle_mode_transition()
                         
-                        try:
-                            if hasattr(robot, 'speech_manager') and robot.speech_manager:
-                                robot.speech_manager.perform_action("Found Person")
-                        except Exception:
-                            pass
+                        robot = self.get_robot()
+                        robot.set_mode(RobotMode.IDLE)
+                        return Status.SUCCESS
+                elif event.type == pygame.QUIT:
+                    # Enhanced IDLE mode transition with immediate facial restoration
+                    self.perform_enhanced_idle_mode_transition()
+                    
+                    robot = self.get_robot()
+                    robot.set_mode(RobotMode.IDLE)
+                    return Status.SUCCESS
+            
+            # Display and tracking logic
+            should_update_display = (self.update_counter % self.display_update_rate == 0)
+            
+            if should_update_display:
+                try:
+                    if self.screen:
+                        self.screen.fill((0, 0, 0))
+                        self.draw_radar_grid()
+                        self.draw_robot()
                         
-                        self.current_path = []
-                        self.filtered_waypoints = []
-                        self.stable_target_position = None
-                        return
-                    else:
-                        self.current_path = []
-                        return
-                
-                current_waypoint = self.current_path[self.current_waypoint_index]
+                        # Get and display obstacles
+                        obstacles = []
+                        if self.lidar_system:
+                            obstacles = self.lidar_system.get_display_obstacles()
+                            if obstacles:
+                                self.draw_lidar_data(obstacles)
+                        
+                        # Person tracking and navigation
+                        person_data = self.get_person_position()
+                        
+                        if person_data:
+                            self.draw_person_detection(person_data)
+                            
+                            try:
+                                robot = self.get_robot()
+                                camera_reading = robot.camera_sensor.get_reading()
+                                if camera_reading:
+                                    people = camera_reading.get_people_locations()
+                                    if people:
+                                        self.blackboard.set("TARGET_PERSON", people[0])
+                            except Exception:
+                                pass
+                        
+                        pygame.display.flip()
+                        
+                except Exception:
+                    pass
             
-            movement_direction = self.calculate_movement_direction(current_waypoint)
-            movement_speed = self.calculate_movement_speed(current_waypoint, actual_person_distance)
+            return Status.RUNNING
             
-            movement_config = VelocityConfig(movement_direction, movement_speed)
-            velocity_manager.perform_action(movement_config)
+        except Exception:
+            # Emergency stop and safe transition
+            try:
+                self.stop_robot_completely()
+                self.perform_enhanced_idle_mode_transition()
+            except Exception:
+                pass
             
-            self.movement_active = True
+            return Status.RUNNING
+
+    def terminate(self, new_status: Status):
+        """Enhanced termination with immediate facial animation restoration"""
+        try:
+            # Step 1: Stop all movement and tracking
+            self.stop_robot_completely()
+            self.pathfinding_in_progress = False
+            self.current_path = []
+            self.filtered_waypoints = []
+            
+            # Step 2: Stop head tracking
+            if self.head_tracker:
+                self.head_tracker.stop_tracking()
+                self.head_tracker = None
+            
+            # Step 3: Clear blackboard
+            try:
+                if self.blackboard.exists("LIDAR_SYSTEM"):
+                    self.blackboard.unset("LIDAR_SYSTEM")
+            except Exception:
+                pass
+            
+            self.initialized = False
             
         except Exception:
             pass
-
-    def calculate_movement_direction(self, waypoint):
-        """Calculate movement direction"""
-        angle_deg = math.degrees(waypoint.angle)
         
-        while angle_deg > 180:
-            angle_deg -= 360
-        while angle_deg < -180:
-            angle_deg += 360
+        # Call parent termination
+        super().terminate(new_status)
         
-        if -25 <= angle_deg <= 25:
-            return MovementDirection.FORWARDS
-        elif 25 < angle_deg <= 70:
-            return MovementDirection.FORWARDS_RIGHT  
-        elif -70 <= angle_deg < -25:
-            return MovementDirection.FORWARDS_LEFT
-        elif 70 < angle_deg <= 110:
-            return MovementDirection.RIGHT
-        elif -110 <= angle_deg < -70:
-            return MovementDirection.LEFT
-        else:
-            if angle_deg > 0:
-                return MovementDirection.RIGHT
-            else:
-                return MovementDirection.LEFT
-
-    def calculate_movement_speed(self, waypoint, person_distance):
-        """Calculate movement speed"""
+        # CRITICAL: Final facial animation restoration - DO NOT REMOVE THIS
         try:
-            distance = waypoint.distance
-            angle_deg = abs(math.degrees(waypoint.angle))
+            robot = self.get_robot()
             
-            if distance < 800:
-                base_speed = 0.8
-            elif distance < 1500:
-                base_speed = 1.0
-            elif distance < 2500:
-                base_speed = 1.2
+            # Center head first
+            self.center_head_for_idle_mode()
+            time.sleep(0.5)
+            
+            # Aggressive facial animation restoration
+            if hasattr(robot, 'facial_animation_manager') and robot.facial_animation_manager:
+                # Bring to front aggressively
+                robot.facial_animation_manager.bring_to_front()
+                time.sleep(0.2)
+                
+                # Ensure window is open
+                if not hasattr(robot.facial_animation_manager, 'display') or robot.facial_animation_manager.display is None:
+                    robot.facial_animation_manager.open_window()
+                    time.sleep(0.3)
+                
+                # Display resting face multiple times for reliability
+                if hasattr(robot.facial_animation_manager, 'resting_face_img'):
+                    for _ in range(3):  # Multiple attempts
+                        try:
+                            robot.facial_animation_manager.display.fill((0, 0, 0))
+                            robot.facial_animation_manager.display.blit(
+                                robot.facial_animation_manager.resting_face_img, (0, 0)
+                            )
+                            pygame.display.flip()
+                            pygame.display.update()
+                            time.sleep(0.1)
+                        except Exception:
+                            continue
+                
+                # Final announcement if not already done
+                if not self.idle_mode_announced:
+                    try:
+                        if hasattr(robot, 'speech_manager') and robot.speech_manager:
+                            robot.speech_manager.perform_action("IDLE MODE")
+                            self.idle_mode_announced = True
+                    except Exception:
+                        pass
+                        
+        except Exception:
+            pass
+
+
+class StableLidarTest(MaxineBehavior):
+    """Stable LiDAR Test with enhanced facial animation restoration - simplified version of LidarChase"""
+    
+    def __init__(self):
+        super().__init__("Stable LiDAR Test with Enhanced Facial Restoration")
+        
+        # Blackboard setup
+        self.blackboard.register_key("TARGET_PERSON", access=py_trees.common.Access.READ)
+        self.blackboard.register_key("HEAD_CENTER_POSITION", access=py_trees.common.Access.WRITE)
+        self.blackboard.register_key("LIDAR_SYSTEM", access=py_trees.common.Access.WRITE)
+        
+        # Core components
+        self.lidar_system = None
+        self.screen = None
+        self.head_tracker = None
+        self.facial_restorer = EnhancedFacialAnimationRestorer()
+        self.initialized = False
+        
+        # Speech tracking to prevent multiple announcements
+        self.idle_mode_announced = False
+        
+        # Head tracking state
+        self.current_head_angle = 0.0
+        self.head_angle_lock = threading.Lock()
+        
+        # Display parameters
+        self.center_x = 0
+        self.center_y = 0
+        self.scale = 0
+        self.update_counter = 0
+        self.display_update_rate = 3
+        
+        if not pygame.get_init():
+            pygame.init()
+        
+        pygame.font.init()
+    
+    def initialize_components(self):
+        """Initialize test mode components"""
+        if self.initialized:
+            return True
+        
+        try:
+            display_info = pygame.display.Info()
+            self.screen = pygame.display.set_mode((display_info.current_w, display_info.current_h), pygame.FULLSCREEN)
+            pygame.display.set_caption("MAXINE STABLE LIDAR TEST")
+            
+            self.center_x = display_info.current_w // 2
+            self.center_y = display_info.current_h // 2
+            self.scale = min(display_info.current_w, display_info.current_h) // 7
+            
+            self.draw_clean_interface()
+            pygame.display.flip()
+            
+            self.blackboard.set("HEAD_CENTER_POSITION", 0.0)
+            
+            # Initialize head tracker
+            robot = self.get_robot()
+            if (hasattr(robot, 'head_velocity_manager') and robot.head_velocity_manager) or \
+               (hasattr(robot, 'servo_controller') and robot.servo_controller):
+                try:
+                    self.head_tracker = HeadTracker(
+                        robot.head_velocity_manager if hasattr(robot, 'head_velocity_manager') else None,
+                        robot.servo_controller if hasattr(robot, 'servo_controller') else None
+                    )
+                    self.head_tracker.start_tracking()
+                    self.head_tracker.set_manual_position(0.0)
+                    self.current_head_angle = 0.0
+                except Exception:
+                    self.head_tracker = None
             else:
-                base_speed = 1.4
+                self.head_tracker = None
             
-            if person_distance < 2000:
-                base_speed *= 0.8
+            self.initialized = True
+            self.start_stable_lidar()
             
-            if person_distance < 1500:
-                base_speed *= 0.9
-            
-            if angle_deg > 45:
-                base_speed *= 0.8
-            elif angle_deg > 25:
-                base_speed *= 0.9
-            
-            return max(0.6, min(1.8, base_speed))
+            return True
             
         except Exception:
-            return 0.8
+            self.initialized = False
+            return False
+    
+    def start_stable_lidar(self):
+        """Start stable LiDAR system for testing"""
+        try:
+            if not self.lidar_system:
+                self.lidar_system = UltraStableLidarSystem()
+                success = self.lidar_system.start()
+                if success:
+                    self.blackboard.set("LIDAR_SYSTEM", self.lidar_system)
+                    time.sleep(3)
+        except Exception:
+            pass
+    
+    def draw_clean_interface(self):
+        """Draw clean test interface"""
+        self.screen.fill((0, 0, 0))
+        self.draw_radar_grid()
+        self.draw_robot()
+    
+    def draw_radar_grid(self):
+        """Draw radar grid for test visualization"""
+        for distance in [1000, 2000, 3000, 4000, 5000, 6000]:
+            radius = distance * self.scale // 1000
+            if radius < min(self.center_x, self.center_y) - 50:
+                line_width = 3 if distance == 6000 else 2
+                color = (0, 150, 0) if distance < 6000 else (255, 255, 0)
+                pygame.draw.circle(self.screen, color, (self.center_x, self.center_y), radius, line_width)
+        
+        for angle in [0, 45, 90, 135, 180, 225, 270, 315]:
+            display_angle_rad = math.radians(90 - angle)
+            line_length = min(self.center_x, self.center_y) - 80
+            end_x = self.center_x + int(line_length * math.cos(display_angle_rad))
+            end_y = self.center_y - int(line_length * math.sin(display_angle_rad))
+            line_width = 3 if angle % 90 == 0 else 1
+            pygame.draw.line(self.screen, (0, 150, 0), (self.center_x, self.center_y), (end_x, end_y), line_width)
+    
+    def draw_robot(self):
+        """Draw robot representation"""
+        pygame.draw.circle(self.screen, (0, 255, 0), (self.center_x, self.center_y), 15, 3)
+        arrow_end_x = self.center_x
+        arrow_end_y = self.center_y - 30
+        pygame.draw.line(self.screen, (0, 255, 0), (self.center_x, self.center_y), (arrow_end_x, arrow_end_y), 5)
+    
+    def draw_lidar_data(self, obstacles):
+        """Draw LiDAR obstacles for testing"""
+        if not obstacles:
+            return 0
+        
+        drawn_count = 0
+        for angle, distance in obstacles:
+            if 100 < distance < 6000:
+                distance_m = distance / 1000.0
+                display_angle_rad = math.radians(90 - angle)
+                
+                x = self.center_x + int(distance_m * self.scale * math.cos(display_angle_rad))
+                y = self.center_y - int(distance_m * self.scale * math.sin(display_angle_rad))
+                
+                if 0 <= x < self.screen.get_width() and 0 <= y < self.screen.get_height():
+                    pygame.draw.circle(self.screen, (255, 0, 0), (x, y), 4)
+                    drawn_count += 1
+        
+        return drawn_count
+    
+    def draw_info(self, scan_count):
+        """Draw test mode information"""
+        info_lines = [
+            "LIDAR TEST MODE",
+            f"Obstacles: {scan_count}",
+            "ESC - Return to IDLE MODE"
+        ]
+        
+        font = pygame.font.Font(None, 48)
+        y_offset = 50
+        
+        for line in info_lines:
+            if "LIDAR TEST MODE" in line:
+                color = (255, 255, 0)
+                text_surface = pygame.font.Font(None, 64).render(line, True, color)
+            elif "ESC" in line:
+                color = (255, 0, 0)
+                text_surface = font.render(line, True, color)
+            else:
+                color = (255, 255, 255)
+                text_surface = font.render(line, True, color)
+            
+            self.screen.blit(text_surface, (50, y_offset))
+            y_offset += 60
+
+    def center_head_for_idle_mode(self):
+        """Return head to center position for IDLE mode"""
+        try:
+            robot = self.get_robot()
+            
+            centering_methods = [
+                lambda: robot.servo_controller.center() if hasattr(robot, 'servo_controller') and robot.servo_controller else None,
+                lambda: robot.head_velocity_manager.center_head() if hasattr(robot, 'head_velocity_manager') and robot.head_velocity_manager else None,
+            ]
+            
+            for method in centering_methods:
+                try:
+                    result = method()
+                    if result is not None:
+                        time.sleep(0.5)
+                        break
+                except Exception:
+                    continue
+                    
+        except Exception:
+            pass
 
     def stop_robot(self):
         """Stop robot movement"""
@@ -1253,164 +1354,69 @@ class StableLidarChase(MaxineBehavior):
             if velocity_manager:
                 stop_config = VelocityConfig(MovementDirection.NONE, 0.0)
                 velocity_manager.perform_action(stop_config)
+                
+        except Exception:
+            pass
+
+    def perform_enhanced_idle_mode_transition(self):
+        """Perform enhanced transition to IDLE mode for test mode"""
+        try:
+            robot = self.get_robot()
             
-            self.movement_active = False
+            # Stop movement
+            self.stop_robot()
+            
+            # Center head
+            self.center_head_for_idle_mode()
+            
+            # Stop LiDAR
+            if self.lidar_system:
+                self.lidar_system.stop()
+                self.lidar_system = None
+            
+            # Clear pygame events
+            if pygame.get_init():
+                pygame.event.clear()
+            
+            # Restore facial animation immediately
+            self.facial_restorer.restore_resting_face_immediately(robot)
+            
+            # Announce mode change ONLY ONCE
+            if not self.idle_mode_announced:
+                try:
+                    if hasattr(robot, 'speech_manager') and robot.speech_manager:
+                        robot.speech_manager.perform_action("IDLE MODE")
+                        self.idle_mode_announced = True
+                except Exception:
+                    pass
+            
+            return True
             
         except Exception:
-            self.movement_active = False
-
-    def reset_path_following(self):
-        """Reset path following"""
-        self.current_waypoint_index = 1
-        self.movement_active = False
-
-    def draw_smart_path(self, path, waypoints):
-        """Draw path with waypoints"""
-        if not path or len(path) < 1:
-            return
-        
-        screen_points = []
-        for pos in path:
-            try:
-                distance_m = pos.distance / 1000.0
-                angle_deg = math.degrees(pos.angle)
-                
-                if pos.distance == 0 and pos.angle == 0:
-                    screen_points.append((self.center_x, self.center_y))
-                else:
-                    display_angle_rad = math.radians(90 - angle_deg)
-                    x = self.center_x + int(distance_m * self.scale * math.cos(display_angle_rad))
-                    y = self.center_y - int(distance_m * self.scale * math.sin(display_angle_rad))
-                    screen_points.append((x, y))
-            except Exception:
-                continue
-        
-        if len(screen_points) >= 2:
-            for i in range(len(screen_points) - 1):
-                pygame.draw.line(self.screen, (255, 255, 0), screen_points[i], screen_points[i + 1], 6)
-        
-        waypoint_screen_points = []
-        for pos in waypoints:
-            try:
-                distance_m = pos.distance / 1000.0
-                angle_deg = math.degrees(pos.angle)
-                
-                if pos.distance == 0 and pos.angle == 0:
-                    waypoint_screen_points.append((self.center_x, self.center_y))
-                else:
-                    display_angle_rad = math.radians(90 - angle_deg)
-                    x = self.center_x + int(distance_m * self.scale * math.cos(display_angle_rad))
-                    y = self.center_y - int(distance_m * self.scale * math.sin(display_angle_rad))
-                    waypoint_screen_points.append((x, y))
-            except Exception:
-                continue
-        
-        for i, point in enumerate(waypoint_screen_points):
-            if i == 0:
-                pygame.draw.circle(self.screen, (0, 255, 0), point, 12)
-            elif i == len(waypoint_screen_points) - 1:
-                pass
-            else:
-                pygame.draw.circle(self.screen, (255, 255, 255), point, 8)
+            return False
 
     def update(self) -> Status:
-        """Main update with stable LiDAR system and head calibration"""
+        """Test mode update with enhanced exit handling"""
         try:
             if not self.initialized:
                 self.initialize_components()
                 return Status.RUNNING
             
-            # Handle head calibration mode first
-            if self.calibration_mode and not self.calibration_complete:
-                # Handle pygame events during calibration
-                for event in pygame.event.get():
-                    if event.type == pygame.KEYDOWN:
-                        if event.key == pygame.K_ESCAPE:
-                            robot = self.get_robot()
-                            self.stop_robot()
-                            
-                            if self.lidar_system:
-                                self.lidar_system.stop()
-                                self.lidar_system = None
-                            
-                            try:
-                                if hasattr(robot, 'speech_manager') and robot.speech_manager:
-                                    robot.speech_manager.perform_action("IDLE MODE")
-                            except Exception:
-                                pass
-                            
-                            robot.set_mode(RobotMode.IDLE)
-                            return Status.SUCCESS
-                    elif event.type == pygame.QUIT:
-                        robot = self.get_robot()
-                        self.stop_robot()
-                        
-                        if self.lidar_system:
-                            self.lidar_system.stop()
-                            self.lidar_system = None
-                        
-                        try:
-                            if hasattr(robot, 'speech_manager') and robot.speech_manager:
-                                robot.speech_manager.perform_action("IDLE MODE")
-                        except Exception:
-                            pass
-                        
-                        robot.set_mode(RobotMode.IDLE)
-                        return Status.SUCCESS
-                
-                # Handle calibration
-                if self.handle_head_calibration():
-                    # Calibration complete, proceed to normal operation
-                    pass
-                
-                # Draw calibration interface
-                self.draw_calibration_interface()
-                
-                return Status.RUNNING
-            
-            # Normal operation mode (after calibration is complete)
             self.update_counter += 1
             
-            # Handle pygame events
+            # Handle events with enhanced exit
             for event in pygame.event.get():
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
+                        self.perform_enhanced_idle_mode_transition()
+                        
                         robot = self.get_robot()
-                        self.stop_robot()
-                        self.pathfinding_in_progress = False
-                        self.current_path = []
-                        self.filtered_waypoints = []
-                        
-                        self.center_head_on_exit()
-                        
-                        if self.lidar_system:
-                            self.lidar_system.stop()
-                            self.lidar_system = None
-                        
-                        try:
-                            if hasattr(robot, 'speech_manager') and robot.speech_manager:
-                                robot.speech_manager.perform_action("IDLE MODE")
-                        except Exception:
-                            pass
-                        
                         robot.set_mode(RobotMode.IDLE)
                         return Status.SUCCESS
                 elif event.type == pygame.QUIT:
+                    self.perform_enhanced_idle_mode_transition()
+                    
                     robot = self.get_robot()
-                    self.stop_robot()
-                    
-                    self.center_head_on_exit()
-                    
-                    if self.lidar_system:
-                        self.lidar_system.stop()
-                        self.lidar_system = None
-                    
-                    try:
-                        if hasattr(robot, 'speech_manager') and robot.speech_manager:
-                            robot.speech_manager.perform_action("IDLE MODE")
-                    except Exception:
-                        pass
-                    
                     robot.set_mode(RobotMode.IDLE)
                     return Status.SUCCESS
             
@@ -1424,214 +1430,65 @@ class StableLidarChase(MaxineBehavior):
                         self.draw_radar_grid()
                         self.draw_robot()
                         
-                        # Get display obstacles from stable system
+                        # Get display obstacles
                         obstacles = []
                         if self.lidar_system:
                             obstacles = self.lidar_system.get_display_obstacles()
                             if obstacles:
                                 self.draw_lidar_data(obstacles)
                         
-                        person_data = self.get_person_position()
-                        
-                        if person_data:
-                            self.draw_person_detection(person_data)
-                            self.update_pathfinding(person_data)
-                            
-                            try:
-                                robot = self.get_robot()
-                                camera_reading = robot.camera_sensor.get_reading()
-                                if camera_reading:
-                                    people = camera_reading.get_people_locations()
-                                    if people:
-                                        self.blackboard.set("TARGET_PERSON", people[0])
-                            except Exception:
-                                pass
-                        
-                        if self.current_path and self.filtered_waypoints:
-                            self.draw_smart_path(self.current_path, self.filtered_waypoints)
+                        # Draw test info
+                        self.draw_info(len(obstacles) if obstacles else 0)
                         
                         pygame.display.flip()
                         
                 except Exception:
                     pass
-            else:
-                person_data = self.get_person_position()
-                if person_data:
-                    try:
-                        self.update_pathfinding(person_data)
-                        
-                        robot = self.get_robot()
-                        camera_reading = robot.camera_sensor.get_reading()
-                        if camera_reading:
-                            people = camera_reading.get_people_locations()
-                            if people:
-                                self.blackboard.set("TARGET_PERSON", people[0])
-                    except Exception:
-                        pass
-            
-            # Robot movement
-            try:
-                person_data = self.get_person_position()
-                if person_data and self.current_path:
-                    self.execute_robot_movement(person_data)
-                elif person_data and self.stable_target_position and self.stable_target_position.distance < 300:
-                    self.stop_robot()
-                    robot = self.get_robot()
-                    
-                    self.center_head_on_exit()
-                    
-                    try:
-                        if hasattr(robot, 'speech_manager') and robot.speech_manager:
-                            robot.speech_manager.perform_action("Found Person")
-                            time.sleep(2.0)
-                    except Exception:
-                        pass
-                    
-                    self.current_path = []
-                    self.filtered_waypoints = []
-                    self.stable_target_position = None
-            except Exception:
-                pass
             
             return Status.RUNNING
             
         except Exception:
             try:
-                robot = self.get_robot()
-                if hasattr(robot, 'velocity_manager') and robot.velocity_manager:
-                    stop_config = VelocityConfig(MovementDirection.NONE, 0.0)
-                    robot.velocity_manager.perform_action(stop_config)
-            except Exception:
-                pass
-            
-            return Status.RUNNING
-            
-            # Display update
-            should_update_display = (self.update_counter % self.display_update_rate == 0)
-            
-            if should_update_display:
-                try:
-                    if self.screen:
-                        self.screen.fill((0, 0, 0))
-                        self.draw_radar_grid()
-                        self.draw_robot()
-                        
-                        # Get display obstacles from stable system
-                        obstacles = []
-                        if self.lidar_system:
-                            obstacles = self.lidar_system.get_display_obstacles()
-                            if obstacles:
-                                self.draw_lidar_data(obstacles)
-                        
-                        person_data = self.get_person_position()
-                        
-                        if person_data:
-                            self.draw_person_detection(person_data)
-                            self.update_pathfinding(person_data)
-                            
-                            try:
-                                robot = self.get_robot()
-                                camera_reading = robot.camera_sensor.get_reading()
-                                if camera_reading:
-                                    people = camera_reading.get_people_locations()
-                                    if people:
-                                        self.blackboard.set("TARGET_PERSON", people[0])
-                            except Exception:
-                                pass
-                        
-                        if self.current_path and self.filtered_waypoints:
-                            self.draw_smart_path(self.current_path, self.filtered_waypoints)
-                        
-                        pygame.display.flip()
-                        
-                except Exception:
-                    pass
-            else:
-                person_data = self.get_person_position()
-                if person_data:
-                    try:
-                        self.update_pathfinding(person_data)
-                        
-                        robot = self.get_robot()
-                        camera_reading = robot.camera_sensor.get_reading()
-                        if camera_reading:
-                            people = camera_reading.get_people_locations()
-                            if people:
-                                self.blackboard.set("TARGET_PERSON", people[0])
-                    except Exception:
-                        pass
-            
-            # Robot movement
-            try:
-                person_data = self.get_person_position()
-                if person_data and self.current_path:
-                    self.execute_robot_movement(person_data)
-                elif person_data and self.stable_target_position and self.stable_target_position.distance < 300:
-                    self.stop_robot()
-                    robot = self.get_robot()
-                    
-                    self.center_head_on_exit()
-                    
-                    try:
-                        if hasattr(robot, 'speech_manager') and robot.speech_manager:
-                            robot.speech_manager.perform_action("Found Person")
-                            time.sleep(2.0)
-                    except Exception:
-                        pass
-                    
-                    self.current_path = []
-                    self.filtered_waypoints = []
-                    self.stable_target_position = None
-            except Exception:
-                pass
-            
-            return Status.RUNNING
-            
-        except Exception:
-            try:
-                robot = self.get_robot()
-                if hasattr(robot, 'velocity_manager') and robot.velocity_manager:
-                    stop_config = VelocityConfig(MovementDirection.NONE, 0.0)
-                    robot.velocity_manager.perform_action(stop_config)
+                self.stop_robot()
+                self.perform_enhanced_idle_mode_transition()
             except Exception:
                 pass
             
             return Status.RUNNING
 
     def terminate(self, new_status: Status):
-        """Clean termination with return to calibrated center"""
+        """Enhanced termination for test mode"""
         try:
             self.stop_robot()
-            self.pathfinding_in_progress = False
-            self.current_path = []
-            self.filtered_waypoints = []
             
-            # Stop head tracking
             if self.head_tracker:
                 self.head_tracker.stop_tracking()
                 self.head_tracker = None
             
-            # Return to calibrated center position
-            self.center_head_on_exit()
+            self.perform_enhanced_idle_mode_transition()
             
-            if self.lidar_system:
-                self.lidar_system.stop()
-                self.lidar_system = None
-            
-            if pygame.get_init():
-                pygame.event.clear()
+            try:
+                if self.blackboard.exists("LIDAR_SYSTEM"):
+                    self.blackboard.unset("LIDAR_SYSTEM")
+            except Exception:
+                pass
             
             self.initialized = False
             
         except Exception:
             try:
-                self.center_head_on_exit()
+                self.center_head_for_idle_mode()
+                robot = self.get_robot()
+                if hasattr(robot, 'facial_animation_manager') and robot.facial_animation_manager:
+                    robot.facial_animation_manager.bring_to_front()
             except:
                 pass
         
         super().terminate(new_status)
 
 
-# Export the stable class
-IsolatedLidarChase = StableLidarChase
-SimpleLidarChase = StableLidarChase
+# Export classes for compatibility
+IsolatedLidarChase = UltraStableLidarChase
+SimpleLidarChase = UltraStableLidarChase
+StableLidarChase = UltraStableLidarChase
+LidarTestBehavior = StableLidarTest

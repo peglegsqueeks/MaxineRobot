@@ -1,0 +1,1 @@
+timestamp,detection_count,avg_confidence,min_distance_mm,max_distance_mm,y_method_distance,z_method_distance,distance_difference,gap_duration_ms,edge_flicker_detected,horizontal_angle,camera_fps,processing_time_ms,frame_count,detection_rate_hz,reliability_score

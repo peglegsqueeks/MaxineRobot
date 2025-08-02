@@ -1,0 +1,1 @@
+timestamp,x_camera,y_camera,z_depth,confidence,bbox_ymin,bbox_ymax,y_bottom_distance,estimated_distance_from_y,x_position_ratio,is_at_edge,z_flicker_detected,z_change_amount

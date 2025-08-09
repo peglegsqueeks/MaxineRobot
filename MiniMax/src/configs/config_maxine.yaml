@@ -1,0 +1,47 @@
+pygame:
+  is_fullscreen: true
+  audio_frequency: 48000
+  audio_size: -16
+  audio_channels: 8
+  audio_buffer: 8192
+
+animation_manager:
+  debug: False
+
+sound_manager:
+  debug: False
+  channel: 1
+
+speech_manager:
+  debug: False
+  rate: 145
+  voice: "english+f4"
+  volume: 1
+
+velocity_manager:
+  debug: False
+  version: 16
+  maxaccel: 50
+  maxdeccel: 40
+  current_limit: 13000
+  simulate: False
+    
+distance_sensors:
+  left:
+      ic2_adress: 11
+      port: 1
+  right: 
+      ic2_adress: 11
+      port: 2
+  front: 
+      ic2_adress: 11
+      port: 3
+  back: 
+      ic2_adress: 11
+      port: 4
+head_manager:
+  debug: False
+  servo_channel: 3
+  max_retries: 5
+  retry_delay: 0.5
+

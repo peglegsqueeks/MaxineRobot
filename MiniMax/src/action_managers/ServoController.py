@@ -5,12 +5,16 @@ import UltraBorg
 
 class PIDController:
     """
-    PID Controller for smooth servo movements
+    PID Controller for smooth servo movements - IMPROVED for oscillation prevention
     """
-    def __init__(self, kp=2.0, ki=0.1, kd=0.05, max_output=0.05):
+    def __init__(self, kp=0.8, ki=0.02, kd=0.15, max_output=0.015):
+        # REDUCED proportional gain from 1.5 to 0.8 to prevent overshooting
         self.kp = kp
-        self.ki = ki
+        # REDUCED integral gain from 0.05 to 0.02 to prevent windup
+        self.ki = ki  
+        # INCREASED derivative gain from 0.08 to 0.15 for better damping
         self.kd = kd
+        # REDUCED max output from 0.02 to 0.015 for gentler movements
         self.max_output = max_output
         
         self.previous_error = 0.0
@@ -25,7 +29,7 @@ class PIDController:
         
     def update(self, setpoint, current_value):
         """
-        Calculate PID output
+        Calculate PID output with improved anti-oscillation tuning
         
         arguments:
             - setpoint: Target position
@@ -42,16 +46,20 @@ class PIDController:
             
         error = setpoint - current_value
         
+        # Proportional term - REDUCED gain to prevent overshoot
         proportional = self.kp * error
         
+        # Integral term - with anti-windup and REDUCED gain
         self.integral += error * dt
-        self.integral = max(-1.0, min(1.0, self.integral))
+        self.integral = max(-0.5, min(0.5, self.integral))  # Tighter anti-windup
         integral = self.ki * self.integral
         
+        # Derivative term - INCREASED for better damping
         derivative = self.kd * (error - self.previous_error) / dt
         
         output = proportional + integral + derivative
         
+        # REDUCED max output for gentler movements
         output = max(-self.max_output, min(self.max_output, output))
         
         self.previous_error = error
@@ -62,12 +70,12 @@ class PIDController:
 
 class ServoController:
     """
-    Enhanced servo controller with PID control for smooth, safe head movements
+    Enhanced servo controller with anti-oscillation PID control for smooth, safe head movements
     """
 
     def __init__(self, i2c_address: int = 11):
         """
-        Initialize the servo controller with PID control
+        Initialize the servo controller with improved anti-oscillation PID control
         
         arguments:
             - i2c_address: I2C address of the UltraBorg board (default 11, which is 0x0b in hex)
@@ -79,24 +87,25 @@ class ServoController:
         self.min_position = -0.98
         self.max_position = 0.98
         
-        # Corrected center position - further counter-clockwise for proper alignment
-        self.center_position = 0.15
+        # Center position - proper alignment at true center
+        self.center_position = 0.0
         
         self.current_position = 0.0
-        self.target_position = self.center_position
+        self.target_position = 0.0  # Start at true center
         
+        # IMPROVED PID settings for anti-oscillation
         self.pid = PIDController(
-            kp=1.5,
-            ki=0.05,
-            kd=0.08,
-            max_output=0.02
+            kp=0.8,      # REDUCED from 1.5 - less aggressive response
+            ki=0.02,     # REDUCED from 0.05 - less integral windup
+            kd=0.15,     # INCREASED from 0.08 - better damping
+            max_output=0.015  # REDUCED from 0.02 - gentler movements
         )
         
         self.movement_thread = None
         self.movement_active = False
         self.movement_lock = threading.Lock()
-        self.position_tolerance = 0.01
-        self.update_rate = 0.05
+        self.position_tolerance = 0.015  # INCREASED tolerance for stability
+        self.update_rate = 0.08  # SLOWER update rate - reduced from 0.05
         
     def initialize(self):
         """
@@ -129,7 +138,7 @@ class ServoController:
             try:
                 self.center_head_smooth()
             except Exception:
-                self.target_position = self.center_position
+                self.target_position = 0.0  # Default to true center
             
             return True
             
@@ -139,7 +148,7 @@ class ServoController:
     
     def center_head_smooth(self):
         """
-        Smoothly center the head to the corrected center position using PID control
+        Smoothly center the head to the corrected center position using improved PID control
         """
         if not self.is_initialized:
             return False
@@ -156,8 +165,8 @@ class ServoController:
             
             self.pid.reset()
             
-            target = self.center_position
-            max_iterations = 100
+            target = 0.0  # True center position
+            max_iterations = 80  # REDUCED from 100 for faster settling
             iteration = 0
             
             while abs(self.current_position - target) > self.position_tolerance and iteration < max_iterations:
@@ -194,12 +203,12 @@ class ServoController:
             return True
             
         except Exception:
-            self.target_position = self.center_position
+            self.target_position = 0.0  # Default to true center
             return True
     
     def _movement_thread_function(self):
         """
-        Background thread function for smooth PID-controlled movement
+        Background thread function for smooth anti-oscillation PID-controlled movement
         """
         try:
             while self.movement_active:
@@ -231,7 +240,7 @@ class ServoController:
     
     def set_position(self, position: float):
         """
-        Set servo position with smooth PID-controlled movement
+        Set servo position with smooth anti-oscillation PID-controlled movement
         
         arguments:
             - position: Target position (-0.98 to +0.98)
@@ -280,7 +289,7 @@ class ServoController:
     
     def wait_for_position(self, timeout=10.0):
         """
-        Wait for servo to reach target position
+        Wait for servo to reach target position with improved tolerance
         
         arguments:
             - timeout: Maximum time to wait in seconds
@@ -323,22 +332,22 @@ class ServoController:
     
     def get_center_position(self):
         """
-        Get the corrected center position for this robot
+        Get the true center position for this robot
         """
-        return self.center_position
+        return 0.0
     
-    def move_left(self, step_size: float = 0.1):
+    def move_left(self, step_size: float = 0.08):  # REDUCED from 0.1
         """
-        Move servo left by step size (with PID control)
+        Move servo left by step size (with anti-oscillation PID control)
         """
         new_position = self.target_position + step_size
         if new_position > self.max_position:
             return False
         return self.set_position(new_position)
     
-    def move_right(self, step_size: float = 0.1):
+    def move_right(self, step_size: float = 0.08):  # REDUCED from 0.1
         """
-        Move servo right by step size (with PID control)
+        Move servo right by step size (with anti-oscillation PID control)
         """
         new_position = self.target_position - step_size
         if new_position < self.min_position:
@@ -347,48 +356,52 @@ class ServoController:
     
     def move_to_angle(self, angle_degrees: float):
         """
-        Move to specific angle in degrees (-90 to +90) with PID control
-        Angles are relative to the corrected center position
+        Move to specific angle in degrees (-90 to +90) with anti-oscillation PID control
+        Angles are relative to true center position (0.0)
         """
         position_offset = (angle_degrees / 90.0) * 0.98
-        position = self.center_position + position_offset
+        position = 0.0 + position_offset  # Use true center as reference
         return self.set_position(position)
     
     def get_angle_degrees(self):
         """
-        Get current angle in degrees relative to corrected center
+        Get current angle in degrees relative to true center (0.0)
         """
-        position_offset = self.current_position - self.center_position
-        return (position_offset / 0.98) * 90.0
+        position_offset = self.current_position - 0.0
+        angle_degrees = (position_offset / 0.98) * 90.0
+        return angle_degrees
     
     def get_target_angle_degrees(self):
         """
-        Get target angle in degrees relative to corrected center
+        Get target angle in degrees relative to true center (0.0)
         """
-        position_offset = self.target_position - self.center_position
-        return (position_offset / 0.98) * 90.0
+        position_offset = self.target_position - 0.0
+        angle_degrees = (position_offset / 0.98) * 90.0
+        return angle_degrees
     
     def center(self):
         """
-        Center the servo to the corrected center position with PID control
+        Center the servo to true center position (0.0)
         """
-        return self.set_position(self.center_position)
+        return self.set_position(0.0)
     
-    def stop_movement(self):
+    def stop(self):
         """
-        Stop any ongoing movement and hold current position
+        Stop all servo movement
         """
         with self.movement_lock:
             self.movement_active = False
-            self.target_position = self.current_position
-            
+        
+        if self.movement_thread and self.movement_thread.is_alive():
+            self.movement_thread.join(timeout=1.0)
+    
     def shutdown(self):
         """
         Shutdown servo controller - center servo smoothly and cleanup
         """
         if self.is_initialized:
             try:
-                self.stop_movement()
+                self.stop()
                 
                 time.sleep(0.2)
                 
@@ -405,18 +418,3 @@ class ServoController:
             self.movement_thread.join(timeout=1.0)
                 
         self.is_initialized = False
-    
-    def get_status(self):
-        """
-        Get detailed status information for debugging
-        """
-        return {
-            'initialized': self.is_initialized,
-            'current_position': self.current_position,
-            'target_position': self.target_position,
-            'center_position': self.center_position,
-            'current_angle_deg': self.get_angle_degrees(),
-            'target_angle_deg': self.get_target_angle_degrees(),
-            'movement_active': self.movement_active,
-            'position_error': abs(self.target_position - self.current_position)
-        }

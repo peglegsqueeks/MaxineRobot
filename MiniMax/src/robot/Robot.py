@@ -1,3 +1,8 @@
+"""
+Robot.py - COMPLETE file with SimpleServoController integration
+This is the FULL Robot class file with all methods and SimpleServoController support
+"""
+
 from ..sensors.CameraSensor import CameraSensor
 from ..sensors.DistanceSensor import DistanceSensor
 from ..sensors.LidarSensor import LidarSensor
@@ -80,6 +85,73 @@ class Robot:
         self.head_manager = head_velocity_manager
         self.head_servo = servo_controller
     
+    def initialize_servo_controller(self):
+        """
+        Initialize servo controller - try SimpleServoController first, fall back to original
+        This method can be called to upgrade the servo controller after robot creation
+        """
+        try:
+            # Try to use the new SimpleServoController first
+            from src.action_managers.SimpleServoController import SimpleServoController
+            
+            print("🔧 Attempting to initialize SimpleServoController...")
+            # Use correct I2C address - 11 (0x0b) not 0x36
+            self.servo_controller = SimpleServoController(i2c_address=11)
+            
+            if self.servo_controller.initialize():
+                print("✅ SimpleServoController initialized successfully")
+                
+                # Also initialize head velocity manager with the new controller
+                if not hasattr(self, 'head_velocity_manager') or self.head_velocity_manager is None:
+                    from src.action_managers.HeadMoveManager import HeadVelocityManager
+                    self.head_velocity_manager = HeadVelocityManager(self.servo_controller)
+                    print("✅ Head velocity manager initialized with SimpleServoController")
+                
+                # Update compatibility aliases
+                self.head_move_manager = self.head_velocity_manager
+                self.head_manager = self.head_velocity_manager
+                self.head_servo = self.servo_controller
+                
+                return True
+            else:
+                print("⚠️ SimpleServoController initialization failed, trying original...")
+                
+        except ImportError:
+            print("⚠️ SimpleServoController not available, using original ServoController")
+        
+        # Fall back to original ServoController
+        try:
+            from src.action_managers.ServoController import ServoController
+            
+            print("🔧 Initializing original ServoController...")
+            # Use correct I2C address - 11 (0x0b) not 0x36
+            self.servo_controller = ServoController(i2c_address=11)
+            
+            if self.servo_controller.initialize():
+                print("✅ Original ServoController initialized")
+                
+                # Initialize head velocity manager
+                if not hasattr(self, 'head_velocity_manager') or self.head_velocity_manager is None:
+                    from src.action_managers.HeadMoveManager import HeadVelocityManager
+                    self.head_velocity_manager = HeadVelocityManager(self.servo_controller)
+                    print("✅ Head velocity manager initialized")
+                
+                # Update compatibility aliases
+                self.head_move_manager = self.head_velocity_manager
+                self.head_manager = self.head_velocity_manager
+                self.head_servo = self.servo_controller
+                
+                return True
+            else:
+                print("❌ Original ServoController initialization failed")
+                self.servo_controller = None
+                return False
+                
+        except Exception as e:
+            print(f"❌ Failed to initialize any servo controller: {e}")
+            self.servo_controller = None
+            return False
+    
     def set_mode(self, mode: RobotMode):
         """
         Set the robot mode
@@ -107,12 +179,40 @@ class Robot:
         except Exception as e:
             print(f"⚠️ Error during robot shutdown: {e}")
     
+    def get_head_position(self):
+        """
+        Get current head position - unified method
+        Returns position in -1.0 to +1.0 range
+        """
+        if hasattr(self, 'servo_controller') and self.servo_controller:
+            return self.servo_controller.get_position()
+        elif hasattr(self, 'head_velocity_manager') and self.head_velocity_manager:
+            return self.head_velocity_manager.get_head_position()
+        return 0.0
+    
+    def set_head_position(self, position):
+        """
+        Set head position - unified method
+        Position should be in -1.0 to +1.0 range
+        """
+        if hasattr(self, 'servo_controller') and self.servo_controller:
+            return self.servo_controller.set_position(position)
+        elif hasattr(self, 'head_velocity_manager') and self.head_velocity_manager:
+            return self.head_velocity_manager.set_head_position(position)
+        return False
+    
     def get_head_angle(self):
         """
         Get current head angle - unified method
+        NOTE: Deprecated, use get_head_position() instead for better accuracy
         """
         if hasattr(self, 'servo_controller') and self.servo_controller:
-            return self.servo_controller.get_angle_degrees()
+            if hasattr(self.servo_controller, 'get_angle_degrees'):
+                return self.servo_controller.get_angle_degrees()
+            else:
+                # Convert position to angle for SimpleServoController
+                position = self.servo_controller.get_position()
+                return (position / 0.98) * 90.0
         elif hasattr(self, 'head_velocity_manager') and self.head_velocity_manager:
             return self.head_velocity_manager.get_head_angle_degrees()
         return 0.0
@@ -120,12 +220,12 @@ class Robot:
     def set_head_angle(self, angle_degrees):
         """
         Set head angle - unified method
+        NOTE: Deprecated, use set_head_position() instead for better accuracy
         """
-        if hasattr(self, 'servo_controller') and self.servo_controller:
-            return self.servo_controller.move_to_angle(angle_degrees)
-        elif hasattr(self, 'head_velocity_manager') and self.head_velocity_manager:
-            return self.head_velocity_manager.set_head_angle_degrees(angle_degrees)
-        return False
+        # Convert angle to position
+        position = (angle_degrees / 90.0) * 0.98
+        position = max(-0.98, min(0.98, position))
+        return self.set_head_position(position)
     
     def center_head(self):
         """

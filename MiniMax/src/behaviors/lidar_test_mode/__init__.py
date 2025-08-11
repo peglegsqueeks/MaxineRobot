@@ -1,62 +1,56 @@
 #!/usr/bin/env python3
 """
-IMPROVED LiDAR Test Mode with better ESC key handling
+LIDAR Test Mode using WORKING servo control from LidarTestBehavior.py
 """
 
 import py_trees
 from src.behaviors.utils import make_press_esc_to_exit_behavior
 from src.types.RobotModes import RobotMode
 
-# Import the working base implementation
-from .StandaloneLidarTest import ExactStandaloneLidarTest
-
-# Import the corrected fixed settlement version
+# Try to import the improved version with working servo control
 try:
-    from .FixedSettlementLidarTest import FixedSettlementLidarTest
-    FIXED_SETTLEMENT_AVAILABLE = True
-    print("✅ CORRECTED FIX: FixedSettlementLidarTest available with proper head tracking")
+    from .ImprovedLidarTest import ImprovedLidarTest
+    IMPROVED_AVAILABLE = True
+    print("✅ Using ImprovedLidarTest with WORKING servo control from LidarTestBehavior")
 except ImportError as e:
-    print(f"❌ CORRECTED FIX: Failed to import FixedSettlementLidarTest: {e}")
-    print("❌ Falling back to original (head tracking will not work)")
-    FixedSettlementLidarTest = ExactStandaloneLidarTest
-    FIXED_SETTLEMENT_AVAILABLE = False
+    print(f"⚠️ Failed to import ImprovedLidarTest: {e}")
+    print("⚠️ Falling back to LidarTestBehavior")
+    IMPROVED_AVAILABLE = False
+
+# Fallback to original LidarTestBehavior if needed
+if not IMPROVED_AVAILABLE:
+    try:
+        from .LidarTestBehavior import LidarTestBehavior as ImprovedLidarTest
+        print("✅ Using original LidarTestBehavior")
+    except ImportError:
+        # Last resort - use basic test
+        from .StandaloneLidarTest import ExactStandaloneLidarTest as ImprovedLidarTest
+        print("⚠️ Using basic StandaloneLidarTest")
 
 
 def make_lidar_test_sub_tree():
     """
-    IMPROVED LiDAR Test Mode with proper ESC handling
-    
-    ESC Behavior:
-    - First ESC: Goes from LIDAR_TEST to IDLE mode (correct)
-    - Second ESC: From IDLE mode, goes to EXIT mode (exits program)
-    
-    This is the intended behavior for all modes.
+    Create LIDAR Test Mode behavior tree with WORKING servo control
+    Uses the PID controller and servo methods from LidarTestBehavior.py
     """
     
     # Create exit behavior - goes to IDLE mode when ESC pressed
     exit_mode_behavior = make_press_esc_to_exit_behavior(RobotMode.IDLE)
     
-    # Use corrected FixedSettlementLidarTest with proper thresholds
-    if FIXED_SETTLEMENT_AVAILABLE:
-        print("🔧 CORRECTED FIX: Using FixedSettlementLidarTest with 6° start threshold")
-        lidar_behavior = FixedSettlementLidarTest()
-        sequence_name = "CORRECTED LiDAR Test Sequence"
-    else:
-        print("❌ CORRECTED FIX: FixedSettlementLidarTest not available")
-        lidar_behavior = ExactStandaloneLidarTest()
-        sequence_name = "Original LiDAR Test Sequence"
+    # Use the improved test with working servo control
+    lidar_behavior = ImprovedLidarTest()
     
-    # Create sequence with memory=False for proper exit behavior
+    # Create sequence
     lidar_test_sub_tree = py_trees.composites.Sequence(
-        name=sequence_name,
-        memory=False,  # CRITICAL: memory=False allows proper exit
+        name="LIDAR Test with Working Servo",
+        memory=False,  # Allow proper exit behavior
         children=[lidar_behavior]
     )
     
-    # Create selector with memory=False for proper exit behavior
+    # Create selector for ESC handling
     return py_trees.composites.Selector(
-        "CORRECTED lidar test mode behavior",
-        memory=False,  # CRITICAL: memory=False allows exit_behavior to work
+        "LIDAR test mode with working servo control",
+        memory=False,  # Allow exit behavior to work
         children=[exit_mode_behavior, lidar_test_sub_tree],
     )
 

@@ -1,70 +1,97 @@
 #!/usr/bin/env python3
 """
-LIDAR Test Mode - Using FIXED LidarTestBehavior with variance tracking and CSV logging
+LiDAR Test Mode Package - Using Optimized Detection System
+Located at: src/behaviors/lidar_test_mode/__init__.py
 """
 
 import py_trees
 from src.behaviors.utils import make_press_esc_to_exit_behavior
 from src.types.RobotModes import RobotMode
 
-# CRITICAL: Use our FIXED LidarTestBehavior with variance tracking, NOT ImprovedLidarTest
+# Try to import the optimized version first
+LIDAR_TEST_AVAILABLE = False
+LidarTestBehavior = None
+
 try:
-    from .LidarTestBehavior import LidarTestBehavior
-    print("✅ Using LidarTestBehavior with VARIANCE TRACKING and CSV LOGGING")
+    # Try optimized version with <37px variance detection
+    from .OptimizedLidarTestMode import LidarTestBehavior
+    print("✅ Using OptimizedLidarTestMode with <37px variance detection")
     LIDAR_TEST_AVAILABLE = True
 except ImportError as e:
-    print(f"❌ Failed to import LidarTestBehavior: {e}")
-    LIDAR_TEST_AVAILABLE = False
+    print(f"⚠️ OptimizedLidarTestMode not available: {e}")
     
-    # Fallback to ImprovedLidarTest if needed (but this doesn't have our fixes)
+    # Try standard version with variance tracking
     try:
-        from .ImprovedLidarTest import ImprovedLidarTest as LidarTestBehavior
-        print("⚠️ WARNING: Using ImprovedLidarTest - NO variance tracking or CSV logging!")
+        from .LidarTestBehavior import StableLidarTest as LidarTestBehavior
+        print("✅ Using standard LidarTestBehavior with variance tracking")
         LIDAR_TEST_AVAILABLE = True
-    except ImportError:
-        print("❌ Failed to import ImprovedLidarTest")
+    except ImportError as e:
+        print(f"❌ Failed to import LidarTestBehavior: {e}")
         
-        # Last resort - basic test
+        # Try ImprovedLidarTest as fallback
         try:
-            from .StandaloneLidarTest import ExactStandaloneLidarTest as LidarTestBehavior
-            print("⚠️ WARNING: Using basic StandaloneLidarTest - NO variance tracking!")
+            from .ImprovedLidarTest import ImprovedLidarTest as LidarTestBehavior
+            print("⚠️ Using ImprovedLidarTest (fallback mode)")
             LIDAR_TEST_AVAILABLE = True
         except ImportError:
-            print("❌ No LiDAR test behaviors available!")
-            LIDAR_TEST_AVAILABLE = False
+            print("❌ Failed to import ImprovedLidarTest")
+            
+            # Last resort - standalone test
+            try:
+                from .StandaloneLidarTest import ExactStandaloneLidarTest as LidarTestBehavior
+                print("⚠️ Using StandaloneLidarTest (basic mode)")
+                LIDAR_TEST_AVAILABLE = True
+            except ImportError:
+                print("❌ No LiDAR test behaviors available!")
+                LIDAR_TEST_AVAILABLE = False
 
 
 def make_lidar_test_sub_tree():
     """
-    Create LIDAR Test Mode behavior tree with VARIANCE TRACKING and CSV LOGGING
-    Uses the FIXED LidarTestBehavior with all our improvements
+    Create LiDAR Test Mode behavior tree
+    
+    CRITICAL py_trees structure (per project instruction #9):
+    - Uses Selector with exit_mode_behavior FIRST
+    - memory=False on BOTH Selector and Sequence (CRITICAL!)
+    - The behavior itself does NOT handle ESC
+    - Exit behavior checks for ESC and returns to IDLE
+    
+    Priority order for behaviors:
+    1. OptimizedLidarTestMode with <37px variance (best)
+    2. Standard LidarTestBehavior with variance tracking
+    3. ImprovedLidarTest (fallback)
+    4. StandaloneLidarTest (basic)
     """
     
-    if not LIDAR_TEST_AVAILABLE:
+    if not LIDAR_TEST_AVAILABLE or LidarTestBehavior is None:
         print("❌ ERROR: No LiDAR test behavior available!")
         # Return a dummy behavior that immediately exits
         return make_press_esc_to_exit_behavior(RobotMode.IDLE)
     
-    # Create exit behavior - goes to IDLE mode when ESC pressed
+    # Create exit behavior for ESC handling - this MUST be first in Selector
     exit_mode_behavior = make_press_esc_to_exit_behavior(RobotMode.IDLE)
     
-    # Use our FIXED LidarTestBehavior with variance tracking
-    lidar_behavior = LidarTestBehavior()
+    # Create the LiDAR test behavior
+    try:
+        lidar_behavior = LidarTestBehavior()
+    except Exception as e:
+        print(f"❌ Failed to create LiDAR test behavior: {e}")
+        return make_press_esc_to_exit_behavior(RobotMode.IDLE)
     
-    # Create sequence
-    lidar_test_sub_tree = py_trees.composites.Sequence(
-        name="LIDAR Test with Variance Tracking",
-        memory=False,  # Allow proper exit behavior
+    # Create sequence with memory=False (CRITICAL - per instruction #9)
+    lidar_test_sequence = py_trees.composites.Sequence(
+        name="LiDAR Test Sequence",
+        memory=False,  # CRITICAL: memory=False allows exit behavior to be checked
         children=[lidar_behavior]
     )
     
-    # Create selector for ESC handling
+    # Create selector with exit behavior FIRST and memory=False
     return py_trees.composites.Selector(
-        "LIDAR test mode with variance tracking and CSV logging",
-        memory=False,  # Allow exit behavior to work
-        children=[exit_mode_behavior, lidar_test_sub_tree],
+        "lidar test mode behavior",
+        memory=False,  # CRITICAL: memory=False allows ESC checking
+        children=[exit_mode_behavior, lidar_test_sequence],  # exit FIRST!
     )
 
 
 # Export the main function
-__all__ = ['make_lidar_test_sub_tree']
+__all__ = ['make_lidar_test_sub_tree', 'LidarTestBehavior', 'LIDAR_TEST_AVAILABLE']

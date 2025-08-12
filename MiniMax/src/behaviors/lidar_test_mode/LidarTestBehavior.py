@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-LIDAR TEST MODE - Fixed with proper detection processing from detection_consistency_test.py
-Implements exact same detection pipeline for consistent results
+COMPLETE LIDAR TEST MODE - Full LIDAR display + Camera variance tracking
+Combines camera detection variance tracking with LIDAR visualization
+Includes: spinning lidar, obstacle display, person circle, radar plot
 """
 
 import py_trees
@@ -12,61 +13,154 @@ import csv
 import statistics
 from collections import deque
 from datetime import datetime
-from enum import Enum
 import numpy as np
 
-# Robot imports
-from robot_config import RobotConfig
-from robot_state_manager import RobotStateManager, RobotMode
-from sensors.lidar_sensor import LidarSensor
-from sensors.camera_sensor import CameraSensor
-from sensors.sound_sensor import TTSEngine
-from displays.lidar_display import LidarDisplay
-from displays.shared_display import SharedDisplay
-from controllers.head_controller import HeadController
+# MiniMax project imports
+from src.behaviors.MaxineBehavior import MaxineBehavior
+from src.types.RobotModes import RobotMode
+
+# Try to import depthai for direct camera access
+try:
+    import depthai as dai
+    DEPTHAI_AVAILABLE = True
+except ImportError:
+    print("⚠️ DepthAI not available - will use robot's camera sensor if available")
+    DEPTHAI_AVAILABLE = False
+
+# Try to import LIDAR
+try:
+    from pyrplidar import PyRPlidar
+    LIDAR_AVAILABLE = True
+except ImportError:
+    print("⚠️ PyRPlidar not available - LIDAR functionality disabled")
+    LIDAR_AVAILABLE = False
 
 
-class LidarTestBehavior(py_trees.behaviour.Behaviour):
-    """Fixed Lidar Test Mode with proper detection processing"""
+class SimpleLidarSystem:
+    """Simple LIDAR system for obstacle detection"""
     
-    def __init__(self, state_manager, config, lidar_sensor, camera_sensor, 
-                 tts_engine, lidar_display, shared_display, head_controller):
-        super().__init__(name="LidarTestMode")
+    def __init__(self, port='/dev/ttyUSB0', baudrate=256000):
+        self.port = port
+        self.baudrate = baudrate
+        self.lidar = None
+        self.is_connected = False
+        self.scan_generator = None
+        self.latest_obstacles = []
         
-        # Store references
-        self.state_manager = state_manager
-        self.config = config
-        self.lidar_sensor = lidar_sensor
-        self.camera_sensor = camera_sensor
-        self.tts_engine = tts_engine
-        self.lidar_display = lidar_display
-        self.shared_display = shared_display
-        self.head_controller = head_controller
+    def start(self):
+        """Start LIDAR system"""
+        if not LIDAR_AVAILABLE:
+            print("⚠️ LIDAR library not available")
+            return False
+            
+        try:
+            print("🚀 Starting LIDAR system...")
+            self.lidar = PyRPlidar()
+            self.lidar.connect(port=self.port, baudrate=self.baudrate, timeout=3.0)
+            self.is_connected = True
+            
+            # Start motor
+            self.lidar.stop()
+            time.sleep(0.5)
+            self.lidar.set_motor_pwm(600)
+            time.sleep(2.0)
+            
+            # Start scanning
+            self.scan_generator = self.lidar.start_scan_express(4)
+            
+            print("✅ LIDAR system started and spinning")
+            return True
+            
+        except Exception as e:
+            print(f"❌ LIDAR start failed: {e}")
+            self.is_connected = False
+            return False
+    
+    def get_obstacles(self):
+        """Get current LIDAR obstacles"""
+        if not self.is_connected or not self.scan_generator:
+            return []
+        
+        try:
+            # Get one scan
+            scan = next(self.scan_generator())
+            
+            obstacles = []
+            for measurement in scan:
+                angle = measurement[1]
+                distance = measurement[2]
+                
+                if distance > 0 and distance < 6000:  # Valid range up to 6m
+                    obstacles.append({
+                        'angle': angle,
+                        'distance': distance
+                    })
+            
+            self.latest_obstacles = obstacles
+            return obstacles
+            
+        except Exception:
+            return self.latest_obstacles
+    
+    def stop(self):
+        """Stop LIDAR system"""
+        if self.lidar and self.is_connected:
+            try:
+                self.lidar.stop()
+                self.lidar.set_motor_pwm(0)
+                self.lidar.disconnect()
+                print("✅ LIDAR stopped")
+            except:
+                pass
+
+
+class CompleteLidarTestBehavior(MaxineBehavior):
+    """
+    Complete LIDAR Test Mode with both LIDAR display and camera variance tracking
+    """
+    
+    def __init__(self):
+        super().__init__(name="CompleteLidarTestMode")
         
         # Mode tracking
         self.mode_start_time = None
         self.test_duration = 30.0
         self.mode_active = False
         
-        # CRITICAL: Frame timing control
+        # LIDAR system
+        self.lidar_system = None
+        
+        # Display system
+        self.screen = None
+        self.clock = None
+        self.screen_width = 1920
+        self.screen_height = 1080
+        self.center_x = 960
+        self.center_y = 540
+        self.scale = 100  # pixels per meter
+        
+        # Direct camera pipeline (for variance tracking)
+        self.device = None
+        self.pipeline = None
+        self.detection_queue = None
+        self.camera_initialized = False
+        
+        # Frame timing control
         self.last_update_time = 0
         self.target_fps = 25
         self.frame_interval = 1.0 / self.target_fps
         self.frame_counter = 0
-        self.detection_skip_frames = 1  # Process every frame like standalone
         
         # FPS monitoring
         self.fps_counter = deque(maxlen=30)
         self.last_frame_time = time.time()
         self.current_fps = 0.0
         
-        # Detection tracking - EXACT from standalone
+        # Detection tracking
         self.current_detection = None
         self.detection_history = deque(maxlen=2000)
-        self.has_detection = False
         
-        # X midpoint variance tracking - EXACT from standalone
-        self.x_midpoints = deque(maxlen=1000)
+        # X midpoint variance tracking
         self.x_midpoints_pixels = deque(maxlen=1000)
         self.x_midpoints_normalized = deque(maxlen=1000)
         self.variance_window = deque(maxlen=100)
@@ -94,7 +188,7 @@ class LidarTestBehavior(py_trees.behaviour.Behaviour):
             'very_unstable': 0
         }
         
-        # Z-depth smoothing - EXACT from standalone
+        # Z-depth smoothing
         self.z_depth_smoother = deque(maxlen=5)
         self.confidence_weights = deque(maxlen=5)
         self.smoothed_z_depth = 0
@@ -110,36 +204,199 @@ class LidarTestBehavior(py_trees.behaviour.Behaviour):
         self.log_filename = "LIDARTEST.csv"
         self.csv_initialized = False
         
-        # Display settings
-        self.variance_summary_interval = 5.0
-        self.last_variance_summary_time = 0
-        
-        # CRITICAL: Queue drain flag
-        self.queue_drained = False
+        # Robot reference
+        self.robot = None
     
     def setup(self, **kwargs):
-        """Prepare for execution"""
+        """Prepare for execution - py_trees lifecycle"""
         self.mode_active = False
         self.mode_start_time = None
-        self.queue_drained = False
         return py_trees.common.Status.SUCCESS
     
+    def initialize_display(self):
+        """Initialize pygame display for LIDAR visualization"""
+        try:
+            if not pygame.display.get_init():
+                pygame.display.init()
+            
+            # Create fullscreen display
+            display_info = pygame.display.Info()
+            self.screen_width = display_info.current_w
+            self.screen_height = display_info.current_h
+            self.screen = pygame.display.set_mode((self.screen_width, self.screen_height), pygame.FULLSCREEN)
+            pygame.display.set_caption("LIDAR Test Mode - Variance Tracking")
+            
+            # Calculate center point
+            self.center_x = self.screen_width // 2
+            self.center_y = self.screen_height // 2
+            
+            # Hide mouse cursor
+            pygame.mouse.set_visible(False)
+            
+            # Create clock for FPS control
+            self.clock = pygame.time.Clock()
+            
+            # Initialize font
+            pygame.font.init()
+            self.font_large = pygame.font.Font(None, 48)
+            self.font_medium = pygame.font.Font(None, 36)
+            self.font_small = pygame.font.Font(None, 24)
+            
+            print("✅ Display initialized for LIDAR visualization")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Display initialization failed: {e}")
+            return False
+    
+    def create_camera_pipeline(self):
+        """Create camera pipeline for detection"""
+        if not DEPTHAI_AVAILABLE:
+            return None
+            
+        try:
+            pipeline = dai.Pipeline()
+            
+            # Camera setup
+            mono_left = pipeline.create(dai.node.MonoCamera)
+            mono_left.setResolution(dai.MonoCameraProperties.SensorResolution.THE_800_P)
+            mono_left.setBoardSocket(dai.CameraBoardSocket.CAM_B)
+            mono_left.setFps(self.target_fps)
+            
+            mono_right = pipeline.create(dai.node.MonoCamera)
+            mono_right.setResolution(dai.MonoCameraProperties.SensorResolution.THE_800_P)
+            mono_right.setBoardSocket(dai.CameraBoardSocket.CAM_C)
+            mono_right.setFps(self.target_fps)
+            
+            # Image manipulation
+            manip_nn = pipeline.create(dai.node.ImageManip)
+            manip_nn.initialConfig.setResize(300, 300)
+            manip_nn.initialConfig.setKeepAspectRatio(False)
+            manip_nn.initialConfig.setFrameType(dai.ImgFrame.Type.BGR888p)
+            mono_right.out.link(manip_nn.inputImage)
+            
+            # Stereo depth
+            depth = pipeline.create(dai.node.StereoDepth)
+            depth.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.DEFAULT)
+            depth.initialConfig.setMedianFilter(dai.MedianFilter.KERNEL_7x7)
+            depth.initialConfig.setConfidenceThreshold(180)
+            depth.setLeftRightCheck(True)
+            depth.setSubpixel(False)
+            depth.setDepthAlign(dai.CameraBoardSocket.CAM_C)
+            
+            mono_left.out.link(depth.left)
+            mono_right.out.link(depth.right)
+            
+            # Find blob file
+            blob_paths = [
+                "./mobilenet-ssd_openvino_2021.4_5shave.blob",
+                "mobilenet-ssd_openvino_2021.4_5shave.blob",
+                "src/models/mobilenet-ssd_openvino_2021.4_5shave.blob"
+            ]
+            
+            blob_path = None
+            import os
+            for path in blob_paths:
+                if os.path.exists(path):
+                    blob_path = path
+                    break
+            
+            if not blob_path:
+                print("⚠️ Could not find blob file")
+                return None
+            
+            # Detection network
+            detection_nn = pipeline.create(dai.node.MobileNetSpatialDetectionNetwork)
+            detection_nn.setConfidenceThreshold(0.4)
+            detection_nn.setBlobPath(blob_path)
+            detection_nn.setBoundingBoxScaleFactor(0.5)
+            detection_nn.setDepthLowerThreshold(100)
+            detection_nn.setDepthUpperThreshold(8000)
+            
+            manip_nn.out.link(detection_nn.input)
+            depth.depth.link(detection_nn.inputDepth)
+            
+            # Output
+            detection_out = pipeline.create(dai.node.XLinkOut)
+            detection_out.setStreamName("detections")
+            detection_nn.out.link(detection_out.input)
+            
+            return pipeline
+            
+        except Exception as e:
+            print(f"⚠️ Pipeline creation error: {e}")
+            return None
+    
+    def initialize_camera(self):
+        """Initialize direct camera access"""
+        if not DEPTHAI_AVAILABLE:
+            print("⚠️ DepthAI not available")
+            return False
+        
+        try:
+            self.pipeline = self.create_camera_pipeline()
+            if not self.pipeline:
+                return False
+            
+            self.device = dai.Device(self.pipeline)
+            
+            # Optimize device
+            try:
+                if hasattr(self.device, 'setLogLevel'):
+                    self.device.setLogLevel(dai.LogLevel.WARN)
+                self.device.setIrLaserDotProjectorIntensity(900)
+            except:
+                pass
+            
+            self.detection_queue = self.device.getOutputQueue("detections", maxSize=4, blocking=False)
+            
+            # Drain stale detections
+            drain_count = 0
+            while self.detection_queue.tryGet() is not None:
+                drain_count += 1
+                if drain_count > 100:
+                    break
+            
+            self.camera_initialized = True
+            print("✅ Camera pipeline initialized")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Camera initialization failed: {e}")
+            return False
+    
     def initialise(self):
-        """Called when behavior starts - initialize test mode"""
+        """Called when behavior starts - py_trees lifecycle"""
         self.mode_active = True
         self.mode_start_time = time.time()
         self.last_update_time = time.time()
         self.last_frame_time = time.time()
         self.frame_counter = 0
-        self.queue_drained = False
         
-        # Clear all tracking data
+        # Get robot reference
+        self.robot = self.get_robot()
+        
+        # Initialize display FIRST (most important for user feedback)
+        if not self.initialize_display():
+            print("⚠️ Display initialization failed - continuing anyway")
+        
+        # Initialize LIDAR
+        self.lidar_system = SimpleLidarSystem()
+        if not self.lidar_system.start():
+            print("⚠️ LIDAR failed to start - continuing without LIDAR")
+            self.lidar_system = None
+        
+        # Initialize camera for detection
+        camera_success = self.initialize_camera()
+        if not camera_success:
+            print("⚠️ Camera initialization failed - no variance tracking")
+        
+        # Clear tracking data
         self.detection_count = 0
         self.consistent_detection_count = 0
         self.large_jumps_count = 0
         self.last_x_midpoint = None
         
-        self.x_midpoints.clear()
         self.x_midpoints_pixels.clear()
         self.x_midpoints_normalized.clear()
         self.variance_window.clear()
@@ -161,320 +418,301 @@ class LidarTestBehavior(py_trees.behaviour.Behaviour):
         # Initialize CSV
         self.initialize_csv_log()
         
-        # CRITICAL: Drain the detection queue to remove stale data
-        self.drain_detection_queue()
-        
         # Set head to center
-        if self.head_controller:
-            self.head_controller.set_angle(0)
-            self.head_angle = 0.0
+        if self.robot:
+            try:
+                if hasattr(self.robot, 'servo_controller') and self.robot.servo_controller:
+                    self.robot.servo_controller.move_to_angle(0)
+                    self.head_angle = 0.0
+            except:
+                pass
         
         # Announce mode
-        if self.tts_engine:
-            self.tts_engine.speak("Test Lidar")
+        if self.robot and hasattr(self.robot, 'speech_manager'):
+            if self.robot.speech_manager:
+                self.robot.speech_manager.perform_action("Test Lidar")
         
         print("\n" + "="*60)
-        print("🎯 LIDAR TEST MODE - FIXED DETECTION PIPELINE")
+        print("🎯 COMPLETE LIDAR TEST MODE")
         print("="*60)
-        print("✅ LiDAR Test Mode initialized with fixed camera pipeline")
-        print(f"📊 Logging variance data to: {self.log_filename}")
-        print("📍 Grid overlay: ON | LiDAR obstacles: ON | Person circle: ON")
+        print(f"✅ LIDAR spinning: {'Yes' if self.lidar_system else 'No'}")
+        print(f"✅ Camera tracking: {'Yes' if self.camera_initialized else 'No'}")
+        print(f"✅ Display active: {'Yes' if self.screen else 'No'}")
+        print(f"📊 Logging to: {self.log_filename}")
         print("-"*60)
     
-    def drain_detection_queue(self):
-        """CRITICAL: Drain stale detections from queue"""
-        if not self.camera_sensor or not self.camera_sensor.camera_initialized:
+    def draw_radar_grid(self):
+        """Draw radar grid on display"""
+        if not self.screen:
             return
         
         try:
-            # Get the detection queue directly
-            detection_queue = self.camera_sensor.detection_queue
-            if detection_queue:
-                # Drain all old detections
-                drained_count = 0
-                while True:
-                    old_detection = detection_queue.tryGet()
-                    if old_detection is None:
-                        break
-                    drained_count += 1
-                    if drained_count > 100:  # Safety limit
-                        break
+            # Draw range circles
+            for radius_m in [1, 2, 3, 4]:  # 1m, 2m, 3m, 4m circles
+                radius_px = int(radius_m * self.scale)
+                pygame.draw.circle(self.screen, (0, 100, 0), 
+                                 (self.center_x, self.center_y), 
+                                 radius_px, 1)
                 
-                if drained_count > 0:
-                    print(f"🔄 Drained {drained_count} stale detections from queue")
-                
-                # Mark as drained
-                self.queue_drained = True
-                
-                # Wait for fresh data
-                time.sleep(0.1)
+                # Draw range labels
+                label = self.font_small.render(f"{radius_m}m", True, (0, 150, 0))
+                self.screen.blit(label, (self.center_x + 5, self.center_y - radius_px - 20))
+            
+            # Draw angle lines
+            for angle in [0, 45, 90, 135, 180, 225, 270, 315]:
+                angle_rad = math.radians(angle - 90)  # Adjust so 0° is forward
+                end_x = self.center_x + int(4 * self.scale * math.cos(angle_rad))
+                end_y = self.center_y + int(4 * self.scale * math.sin(angle_rad))
+                pygame.draw.line(self.screen, (0, 100, 0), 
+                               (self.center_x, self.center_y), 
+                               (end_x, end_y), 1)
+            
+            # Draw robot at center
+            robot_size = 20
+            pygame.draw.rect(self.screen, (255, 255, 255),
+                           (self.center_x - robot_size//2, self.center_y - robot_size//2,
+                            robot_size, robot_size), 2)
+            
         except Exception as e:
-            print(f"⚠️ Error draining queue: {e}")
+            print(f"Grid draw error: {e}")
     
-    def smooth_z_depth(self, raw_z_depth, confidence):
-        """Smooth Z depth - EXACT from standalone"""
+    def draw_lidar_obstacles(self):
+        """Draw LIDAR obstacles on display"""
+        if not self.screen or not self.lidar_system:
+            return 0
+        
         try:
-            self.z_depth_smoother.append(raw_z_depth)
-            self.confidence_weights.append(confidence)
+            obstacles = self.lidar_system.get_obstacles()
+            obstacle_count = 0
             
-            if len(self.z_depth_smoother) < 2:
-                self.smoothed_z_depth = raw_z_depth
-                return raw_z_depth
-            
-            total_weight = 0
-            weighted_sum = 0
-            
-            for i, (z_val, conf) in enumerate(zip(self.z_depth_smoother, self.confidence_weights)):
-                recency_weight = (i + 1) / len(self.z_depth_smoother)
-                confidence_weight = max(0.1, conf)
-                combined_weight = recency_weight * confidence_weight
+            for obstacle in obstacles:
+                angle = obstacle['angle']
+                distance = obstacle['distance']
                 
-                weighted_sum += z_val * combined_weight
-                total_weight += combined_weight
+                # Convert to display coordinates
+                angle_rad = math.radians(angle - 90)  # Adjust so 0° is forward
+                x = self.center_x + int((distance / 1000.0) * self.scale * math.cos(angle_rad))
+                y = self.center_y + int((distance / 1000.0) * self.scale * math.sin(angle_rad))
+                
+                # Color based on distance
+                if distance < 1000:
+                    color = (255, 0, 0)  # Red for close
+                elif distance < 2000:
+                    color = (255, 255, 0)  # Yellow for medium
+                else:
+                    color = (0, 255, 0)  # Green for far
+                
+                pygame.draw.circle(self.screen, color, (x, y), 3)
+                obstacle_count += 1
             
-            smoothed = weighted_sum / total_weight if total_weight > 0 else raw_z_depth
+            return obstacle_count
             
-            if confidence < self.depth_trust_threshold and len(self.z_depth_smoother) > 1:
-                prev_z = self.z_depth_smoother[-2]
-                max_jump = 500
-                if abs(smoothed - prev_z) > max_jump:
-                    blend_factor = confidence / self.depth_trust_threshold
-                    smoothed = prev_z + (smoothed - prev_z) * blend_factor
-            
-            self.smoothed_z_depth = smoothed
-            return smoothed
         except Exception:
-            return raw_z_depth
+            return 0
+    
+    def draw_person_detection(self):
+        """Draw person detection on radar"""
+        if not self.screen or not self.current_detection:
+            return
+        
+        try:
+            x_camera = self.current_detection.get('x_camera_mm', 0)
+            z_depth = self.current_detection.get('z_depth_mm', 0)
+            stability_class = self.current_detection.get('stability_classification', 'stable')
+            
+            if z_depth <= 0:
+                return
+            
+            # Convert camera coordinates to display
+            angle_rad = math.atan2(x_camera, z_depth)
+            distance_m = z_depth / 1000.0
+            
+            x = self.center_x + int(distance_m * self.scale * math.sin(angle_rad))
+            y = self.center_y - int(distance_m * self.scale * math.cos(angle_rad))
+            
+            # Color based on stability
+            if stability_class == 'stable':
+                color = (0, 255, 0)  # Green
+            elif stability_class == 'moderate':
+                color = (255, 255, 0)  # Yellow
+            elif stability_class == 'unstable':
+                color = (255, 165, 0)  # Orange
+            else:
+                color = (255, 0, 0)  # Red
+            
+            # Draw person circle (larger than obstacles)
+            pygame.draw.circle(self.screen, color, (x, y), 12, 3)
+            pygame.draw.circle(self.screen, (255, 255, 255), (x, y), 12, 1)
+            
+        except Exception as e:
+            print(f"Person draw error: {e}")
+    
+    def draw_info_panel(self, obstacle_count):
+        """Draw information panel"""
+        if not self.screen:
+            return
+        
+        try:
+            # Background for info panel
+            panel_rect = pygame.Rect(10, 10, 400, 300)
+            pygame.draw.rect(self.screen, (0, 0, 0), panel_rect)
+            pygame.draw.rect(self.screen, (0, 255, 0), panel_rect, 2)
+            
+            # Title
+            title = self.font_medium.render("LIDAR TEST MODE", True, (0, 255, 255))
+            self.screen.blit(title, (20, 20))
+            
+            # FPS
+            fps_color = (0, 255, 0) if self.current_fps >= 20 else (255, 255, 0) if self.current_fps >= 15 else (255, 0, 0)
+            fps_text = self.font_small.render(f"FPS: {self.current_fps:.1f}", True, fps_color)
+            self.screen.blit(fps_text, (20, 60))
+            
+            # LIDAR status
+            lidar_status = "Active" if self.lidar_system and self.lidar_system.is_connected else "Inactive"
+            lidar_color = (0, 255, 0) if lidar_status == "Active" else (255, 0, 0)
+            lidar_text = self.font_small.render(f"LIDAR: {lidar_status}", True, lidar_color)
+            self.screen.blit(lidar_text, (20, 90))
+            
+            # Obstacle count
+            obstacle_text = self.font_small.render(f"Obstacles: {obstacle_count}", True, (255, 255, 255))
+            self.screen.blit(obstacle_text, (20, 120))
+            
+            # Detection count
+            detection_text = self.font_small.render(f"Detections: {self.detection_count}", True, (255, 255, 255))
+            self.screen.blit(detection_text, (20, 150))
+            
+            # Variance
+            if self.current_std_dev_pixels < 10:
+                var_color = (0, 255, 0)
+                var_status = "STABLE"
+            elif self.current_std_dev_pixels < 25:
+                var_color = (255, 255, 0)
+                var_status = "MODERATE"
+            elif self.current_std_dev_pixels < 50:
+                var_color = (255, 165, 0)
+                var_status = "UNSTABLE"
+            else:
+                var_color = (255, 0, 0)
+                var_status = "VERY UNSTABLE"
+            
+            var_text = self.font_small.render(f"Variance: ±{self.current_std_dev_pixels:.1f}px", True, var_color)
+            self.screen.blit(var_text, (20, 180))
+            
+            status_text = self.font_small.render(f"Status: {var_status}", True, var_color)
+            self.screen.blit(status_text, (20, 210))
+            
+            # Head angle
+            if self.head_tracking_active:
+                head_text = self.font_small.render(f"Head: {self.head_angle:.1f}°", True, (0, 255, 0))
+            else:
+                head_text = self.font_small.render(f"Head: Centered", True, (255, 255, 255))
+            self.screen.blit(head_text, (20, 240))
+            
+            # Time remaining
+            elapsed = time.time() - self.mode_start_time
+            remaining = max(0, self.test_duration - elapsed)
+            time_text = self.font_small.render(f"Time: {remaining:.1f}s", True, (0, 255, 255))
+            self.screen.blit(time_text, (20, 270))
+            
+        except Exception as e:
+            print(f"Info panel error: {e}")
+    
+    def update_display(self):
+        """Update the complete display"""
+        if not self.screen:
+            return
+        
+        try:
+            # Clear screen
+            self.screen.fill((0, 0, 0))
+            
+            # Draw radar grid
+            self.draw_radar_grid()
+            
+            # Draw LIDAR obstacles
+            obstacle_count = self.draw_lidar_obstacles()
+            
+            # Draw person detection
+            self.draw_person_detection()
+            
+            # Draw info panel
+            self.draw_info_panel(obstacle_count)
+            
+            # Update display
+            pygame.display.flip()
+            
+        except Exception as e:
+            print(f"Display update error: {e}")
     
     def process_camera_detection(self):
-        """Process detection - EXACT logic from standalone test"""
-        if not self.camera_sensor or not self.camera_sensor.camera_initialized:
-            return None
-        
-        if not self.queue_drained:
-            self.drain_detection_queue()
+        """Process camera detection (simplified from earlier version)"""
+        if not self.camera_initialized or not self.detection_queue:
             return None
         
         try:
-            # CRITICAL: Use tryGet() to avoid blocking
-            detection_queue = self.camera_sensor.detection_queue
-            if not detection_queue:
-                return None
-            
-            detections = detection_queue.tryGet()
+            detections = self.detection_queue.tryGet()
             if not detections:
                 return None
             
-            # Filter for person detections (label 15)
             person_detections = [det for det in detections.detections if det.label == 15]
-            
             if not person_detections:
                 return None
             
-            # CRITICAL: Always take the CLOSEST person by Z depth
-            # This prevents label swapping issues
             closest_person = min(person_detections, key=lambda p: p.spatialCoordinates.z)
             
-            # Get coordinates
             x_camera = closest_person.spatialCoordinates.x
-            y_camera = closest_person.spatialCoordinates.y
             raw_z_depth = closest_person.spatialCoordinates.z
             confidence = closest_person.confidence
             
-            # Validate Z depth
             if raw_z_depth <= 0 or raw_z_depth > 15000:
                 return None
             
-            # Smooth Z depth
-            smoothed_z_depth = self.smooth_z_depth(raw_z_depth, confidence)
-            
-            # Calculate X midpoint - EXACT from standalone
+            # Calculate X midpoint
             bbox_xmin = closest_person.xmin
             bbox_xmax = closest_person.xmax
-            bbox_ymin = closest_person.ymin
-            bbox_ymax = closest_person.ymax
-            
-            # X midpoint calculations
             x_midpoint_normalized = (bbox_xmin + bbox_xmax) / 2.0
-            
-            # Get screen dimensions
-            if self.shared_display and self.shared_display.screen:
-                screen_width = self.shared_display.screen.get_width()
-            else:
-                screen_width = 1920  # Default
-            
-            x_midpoint_pixels = int(x_midpoint_normalized * screen_width)
+            x_midpoint_pixels = int(x_midpoint_normalized * self.screen_width)
             
             # Track midpoints
-            self.x_midpoints.append(x_camera)
             self.x_midpoints_pixels.append(x_midpoint_pixels)
             self.x_midpoints_normalized.append(x_midpoint_normalized)
             self.variance_window.append(x_midpoint_pixels)
             
-            # Calculate jump from previous
-            x_jump = 0
-            is_large_jump = False
-            if self.last_x_midpoint is not None:
-                x_jump = abs(x_midpoint_pixels - self.last_x_midpoint)
-                is_large_jump = x_jump > self.jump_threshold_pixels
-                if is_large_jump:
-                    self.large_jumps_count += 1
+            # Calculate variance
+            if len(self.variance_window) >= 2:
+                self.current_mean_pixels = statistics.mean(list(self.variance_window))
+                self.current_variance_pixels = statistics.variance(list(self.variance_window))
+                self.current_std_dev_pixels = math.sqrt(self.current_variance_pixels)
             
-            self.last_x_midpoint = x_midpoint_pixels
+            # Classify stability
+            if self.current_std_dev_pixels < 10:
+                stability_class = 'stable'
+            elif self.current_std_dev_pixels < 25:
+                stability_class = 'moderate'
+            elif self.current_std_dev_pixels < 50:
+                stability_class = 'unstable'
+            else:
+                stability_class = 'very_unstable'
+            
+            self.stability_zones[stability_class] = self.stability_zones.get(stability_class, 0) + 1
             
             # Update counts
             self.detection_count += 1
-            if not is_large_jump:
-                self.consistent_detection_count += 1
             
-            # Calculate variance metrics
-            self.calculate_variance_metrics()
-            
-            # Calculate multi-term variance
-            self.short_term_variance.append(x_midpoint_pixels)
-            self.medium_term_variance.append(x_midpoint_pixels)
-            self.long_term_variance.append(x_midpoint_pixels)
-            
-            short_var = self.calculate_deque_variance(self.short_term_variance)
-            medium_var = self.calculate_deque_variance(self.medium_term_variance)
-            long_var = self.calculate_deque_variance(self.long_term_variance)
-            
-            # Classify stability
-            stability_class = self.classify_stability(self.current_std_dev_pixels)
-            self.stability_zones[stability_class] += 1
-            
-            # Check if person is stable for head tracking
-            if self.current_std_dev_pixels < 25:  # Stable enough
-                self.person_stable_count += 1
-            else:
-                self.person_stable_count = 0
-            
-            person_is_settled = self.person_stable_count >= self.person_settled_threshold
-            
-            # Head tracking (only if stable)
-            if person_is_settled and self.head_controller:
-                target_angle = self.calculate_head_angle(x_midpoint_normalized)
-                if abs(target_angle - self.head_angle) > 2:  # Only move if significant change
-                    self.head_controller.set_angle(target_angle)
-                    self.head_angle = target_angle
-                    self.head_tracking_active = True
-            
-            # Create detection data
-            detection_data = {
-                'mode_time_elapsed': time.time() - self.mode_start_time,
-                'timestamp': time.time(),
-                'frame_number': self.frame_counter,
-                'x_midpoint_pixels': x_midpoint_pixels,
-                'x_midpoint_normalized': x_midpoint_normalized,
+            # Store current detection
+            self.current_detection = {
                 'x_camera_mm': x_camera,
-                'z_depth_mm': smoothed_z_depth,
-                'raw_z_depth_mm': raw_z_depth,
+                'z_depth_mm': raw_z_depth,
                 'confidence': confidence,
-                'bbox_xmin': bbox_xmin,
-                'bbox_ymin': bbox_ymin,
-                'bbox_xmax': bbox_xmax,
-                'bbox_ymax': bbox_ymax,
-                'bbox_width': bbox_xmax - bbox_xmin,
-                'bbox_height': bbox_ymax - bbox_ymin,
-                'x_jump_from_previous': x_jump,
-                'is_large_jump': int(is_large_jump),
-                'rolling_variance_pixels': self.current_variance_pixels,
-                'rolling_std_dev_pixels': self.current_std_dev_pixels,
-                'rolling_mean_pixels': self.current_mean_pixels,
-                'short_term_variance': short_var,
-                'medium_term_variance': medium_var,
-                'long_term_variance': long_var,
-                'detection_count': self.detection_count,
-                'consistent_detections': self.consistent_detection_count,
-                'large_jumps_count': self.large_jumps_count,
+                'x_midpoint_pixels': x_midpoint_pixels,
                 'stability_classification': stability_class,
-                'head_angle_deg': self.head_angle,
-                'head_tracking_active': int(self.head_tracking_active),
-                'person_is_settled': int(person_is_settled),
-                'detection_method': 'camera'
+                'rolling_std_dev_pixels': self.current_std_dev_pixels
             }
             
-            # Log to CSV
-            self.log_to_csv(detection_data)
+            return self.current_detection
             
-            # Store as current
-            self.current_detection = detection_data
-            self.detection_history.append(detection_data)
-            
-            # Print status with stability indicator
-            if self.current_std_dev_pixels < 10:
-                stability_icon = "✅ STABLE"
-                stability_color = ""
-            elif self.current_std_dev_pixels < 25:
-                stability_icon = "🔶 MODERATE"
-                stability_color = ""
-            elif self.current_std_dev_pixels < 50:
-                stability_icon = "⚠️ UNSTABLE"
-                stability_color = ""
-            else:
-                stability_icon = "❌ VERY UNSTABLE"
-                stability_color = ""
-            
-            print(f"📍 X:{x_midpoint_pixels:4d}px | Variance: ±{self.current_std_dev_pixels:5.1f}px | {stability_icon} | Z:{int(smoothed_z_depth)}mm")
-            
-            # Check for multiple people (debugging)
-            if len(person_detections) > 1:
-                print(f"⚠️ Multiple people detected: {len(person_detections)}")
-                for i, person in enumerate(person_detections[:3]):  # Show first 3
-                    px = int(((person.xmin + person.xmax) / 2.0) * screen_width)
-                    pz = int(person.spatialCoordinates.z)
-                    pc = person.confidence
-                    print(f"  Person {i}: X={px}px, Z={pz}mm, Conf={pc:.2f}")
-            
-            return detection_data
-            
-        except Exception as e:
-            print(f"⚠️ Detection processing error: {e}")
+        except Exception:
             return None
-    
-    def calculate_variance_metrics(self):
-        """Calculate variance metrics - EXACT from standalone"""
-        try:
-            if len(self.variance_window) < 2:
-                self.current_variance_pixels = 0.0
-                self.current_std_dev_pixels = 0.0
-                self.current_mean_pixels = 0.0
-                return
-            
-            window_data = list(self.variance_window)
-            self.current_mean_pixels = statistics.mean(window_data)
-            self.current_variance_pixels = statistics.variance(window_data)
-            self.current_std_dev_pixels = math.sqrt(self.current_variance_pixels)
-        except Exception:
-            self.current_variance_pixels = 0.0
-            self.current_std_dev_pixels = 0.0
-            self.current_mean_pixels = 0.0
-    
-    def calculate_deque_variance(self, data_deque):
-        """Calculate variance for a deque"""
-        try:
-            if len(data_deque) < 2:
-                return 0.0
-            return statistics.variance(list(data_deque))
-        except Exception:
-            return 0.0
-    
-    def classify_stability(self, std_dev_pixels):
-        """Classify detection stability"""
-        if std_dev_pixels < 10:
-            return 'stable'
-        elif std_dev_pixels < 25:
-            return 'moderate'
-        elif std_dev_pixels < 50:
-            return 'unstable'
-        else:
-            return 'very_unstable'
-    
-    def calculate_head_angle(self, x_normalized):
-        """Calculate head angle for tracking"""
-        # Convert normalized x (0-1) to angle (-45 to +45)
-        angle = (x_normalized - 0.5) * 90
-        return max(-45, min(45, angle))
     
     def calculate_fps(self):
         """Calculate current FPS"""
@@ -490,167 +728,38 @@ class LidarTestBehavior(py_trees.behaviour.Behaviour):
     
     def initialize_csv_log(self):
         """Initialize CSV logging"""
-        if self.csv_initialized:
-            return
-        
         try:
             with open(self.log_filename, 'w', newline='') as csvfile:
                 writer = csv.writer(csvfile)
                 writer.writerow([
-                    'mode_time_elapsed', 'timestamp', 'frame_number',
-                    'x_midpoint_pixels', 'x_midpoint_normalized', 'x_camera_mm',
-                    'z_depth_mm', 'raw_z_depth_mm', 'confidence',
-                    'bbox_xmin', 'bbox_ymin', 'bbox_xmax', 'bbox_ymax',
-                    'bbox_width', 'bbox_height',
-                    'x_jump_from_previous', 'is_large_jump',
-                    'rolling_variance_pixels', 'rolling_std_dev_pixels', 'rolling_mean_pixels',
-                    'short_term_variance', 'medium_term_variance', 'long_term_variance',
-                    'detection_count', 'consistent_detections', 'large_jumps_count',
-                    'stability_classification', 'head_angle_deg', 
-                    'head_tracking_active', 'person_is_settled', 'detection_method'
+                    'timestamp', 'detection_count', 'x_midpoint_pixels',
+                    'rolling_std_dev_pixels', 'stability_classification'
                 ])
             self.csv_initialized = True
-            print(f"✅ CSV log created: {self.log_filename}")
-        except Exception as e:
-            print(f"⚠️ CSV initialization failed: {e}")
-    
-    def log_to_csv(self, data):
-        """Log data to CSV"""
-        try:
-            with open(self.log_filename, 'a', newline='') as csvfile:
-                writer = csv.writer(csvfile)
-                writer.writerow([
-                    data['mode_time_elapsed'],
-                    data['timestamp'],
-                    data['frame_number'],
-                    data['x_midpoint_pixels'],
-                    data['x_midpoint_normalized'],
-                    data['x_camera_mm'],
-                    data['z_depth_mm'],
-                    data['raw_z_depth_mm'],
-                    data['confidence'],
-                    data['bbox_xmin'],
-                    data['bbox_ymin'],
-                    data['bbox_xmax'],
-                    data['bbox_ymax'],
-                    data['bbox_width'],
-                    data['bbox_height'],
-                    data['x_jump_from_previous'],
-                    data['is_large_jump'],
-                    data['rolling_variance_pixels'],
-                    data['rolling_std_dev_pixels'],
-                    data['rolling_mean_pixels'],
-                    data['short_term_variance'],
-                    data['medium_term_variance'],
-                    data['long_term_variance'],
-                    data['detection_count'],
-                    data['consistent_detections'],
-                    data['large_jumps_count'],
-                    data['stability_classification'],
-                    data['head_angle_deg'],
-                    data['head_tracking_active'],
-                    data['person_is_settled'],
-                    data['detection_method']
-                ])
-        except Exception:
+        except:
             pass
     
-    def print_variance_summary(self):
-        """Print variance summary"""
-        print("\n" + "-"*60)
-        print("📊 VARIANCE SUMMARY")
-        print("-"*60)
-        print(f"Total Detections: {self.detection_count}")
-        
-        if self.detection_count > 0:
-            consistency_rate = (self.consistent_detection_count / self.detection_count) * 100
-            print(f"Consistency Rate: {consistency_rate:.1f}%")
-        
-        print(f"Large Jumps (>{self.jump_threshold_pixels}px): {self.large_jumps_count}")
-        print(f"Current Std Dev: ±{self.current_std_dev_pixels:.1f}px")
-        print(f"Current Mean X: {self.current_mean_pixels:.0f}px")
-        
-        # Stability distribution
-        total_zones = sum(self.stability_zones.values())
-        if total_zones > 0:
-            print("\nStability Distribution:")
-            for zone, count in self.stability_zones.items():
-                percentage = (count / total_zones) * 100
-                if zone == 'stable':
-                    print(f"  Stable (<10px):      {percentage:6.1f}%")
-                elif zone == 'moderate':
-                    print(f"  Moderate (10-25px):  {percentage:6.1f}%")
-                elif zone == 'unstable':
-                    print(f"  Unstable (25-50px):  {percentage:6.1f}%")
-                else:
-                    print(f"  Very Unstable (>50px): {percentage:6.1f}%")
-        print("-"*60)
-    
-    def update_display(self):
-        """Update the display with lidar and detection info"""
-        if not self.lidar_display or not self.shared_display:
-            return
-        
-        try:
-            # Get lidar data
-            lidar_data = self.lidar_sensor.get_scan_data() if self.lidar_sensor else None
-            
-            # Prepare detection info for display
-            detection_info = None
-            if self.current_detection:
-                detection_info = {
-                    'x_pixels': self.current_detection['x_midpoint_pixels'],
-                    'z_mm': self.current_detection['z_depth_mm'],
-                    'variance': self.current_std_dev_pixels,
-                    'stability': self.current_detection['stability_classification'],
-                    'head_angle': self.head_angle
-                }
-            
-            # Update lidar display
-            self.lidar_display.draw_lidar_view(
-                lidar_data=lidar_data,
-                person_detection=detection_info,
-                show_grid=True,
-                show_obstacles=True,
-                show_person=True
-            )
-            
-            # Update shared display
-            self.shared_display.refresh()
-            
-        except Exception as e:
-            print(f"⚠️ Display update error: {e}")
-    
     def update(self):
-        """Main update - called by py_trees"""
+        """Main update - py_trees lifecycle"""
         if not self.mode_active:
             return py_trees.common.Status.FAILURE
         
         current_time = time.time()
         
-        # CRITICAL: Enforce frame timing
-        time_since_last_update = current_time - self.last_update_time
-        if time_since_last_update < self.frame_interval:
-            # Skip this update to maintain consistent FPS
-            return py_trees.common.Status.RUNNING
-        
-        self.last_update_time = current_time
-        
         # Update frame counter and FPS
         self.frame_counter += 1
         self.calculate_fps()
         
-        # Process detection if it's time
-        if self.frame_counter % self.detection_skip_frames == 0:
+        # Process camera detection
+        if self.camera_initialized:
             self.process_camera_detection()
         
         # Update display
         self.update_display()
         
-        # Print variance summary periodically
-        if current_time - self.last_variance_summary_time > self.variance_summary_interval:
-            self.print_variance_summary()
-            self.last_variance_summary_time = current_time
+        # Control display FPS
+        if self.clock:
+            self.clock.tick(self.target_fps)
         
         # Check for ESC key
         keys = pygame.key.get_pressed()
@@ -660,61 +769,31 @@ class LidarTestBehavior(py_trees.behaviour.Behaviour):
         # Check test duration
         elapsed = current_time - self.mode_start_time
         if elapsed >= self.test_duration:
-            self.print_final_summary()
             return py_trees.common.Status.SUCCESS
         
         return py_trees.common.Status.RUNNING
     
-    def print_final_summary(self):
-        """Print final test summary"""
-        print("\n" + "="*60)
-        print("📊 LIDAR TEST MODE - FINAL VARIANCE SUMMARY")
-        print("="*60)
-        
-        test_duration = time.time() - self.mode_start_time
-        print(f"Total Test Duration: {test_duration:.1f} seconds")
-        print(f"Total Detections: {self.detection_count}")
-        
-        if self.detection_count > 0:
-            consistency_rate = (self.consistent_detection_count / self.detection_count) * 100
-            print(f"Consistency Rate: {consistency_rate:.1f}%")
-            
-            if len(self.x_midpoints_pixels) > 1:
-                overall_variance = statistics.variance(list(self.x_midpoints_pixels))
-                overall_std_dev = math.sqrt(overall_variance)
-                print(f"Overall Std Dev: ±{overall_std_dev:.1f}px")
-        
-        print(f"Large Jumps (>{self.jump_threshold_pixels}px): {self.large_jumps_count}")
-        print(f"Data saved to: {self.log_filename}")
-        print("="*60)
-    
     def terminate(self, new_status):
-        """Called when behavior stops"""
+        """Called when behavior stops - py_trees lifecycle"""
         self.mode_active = False
         
-        # Center head
-        if self.head_controller:
-            self.head_controller.set_angle(0)
+        # Stop LIDAR
+        if self.lidar_system:
+            self.lidar_system.stop()
         
-        # Final summary if we ran
-        if self.mode_start_time:
-            elapsed = time.time() - self.mode_start_time
-            if elapsed > 2:  # Only if we ran for more than 2 seconds
-                self.print_final_summary()
-
-
-def make_lidar_test_behavior(state_manager, config, lidar_sensor=None, 
-                             camera_sensor=None, tts_engine=None, 
-                             lidar_display=None, shared_display=None,
-                             head_controller=None):
-    """Factory function to create Lidar Test behavior"""
-    return LidarTestBehavior(
-        state_manager=state_manager,
-        config=config,
-        lidar_sensor=lidar_sensor,
-        camera_sensor=camera_sensor,
-        tts_engine=tts_engine,
-        lidar_display=lidar_display,
-        shared_display=shared_display,
-        head_controller=head_controller
-    )
+        # Clean up camera
+        if self.device:
+            try:
+                self.device.close()
+            except:
+                pass
+        
+        # Clear display
+        if self.screen:
+            self.screen.fill((0, 0, 0))
+            pygame.display.flip()
+        
+        print("\n" + "="*60)
+        print("📊 LIDAR TEST MODE COMPLETE")
+        print(f"Total Detections: {self.detection_count}")
+        print("="*60)

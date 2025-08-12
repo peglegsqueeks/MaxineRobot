@@ -1,15 +1,8 @@
 #!/usr/bin/env python3
 """
-Optimized LiDAR Test Mode - Standalone with Integrated Detection System
+Optimized LiDAR Test Mode - Integration of Standalone Detection System
 Uses EXACT detection pipeline from detection_consistency_test.py for <37px variance
-Includes all necessary LiDAR components directly (no external imports needed)
-FILE LOCATION: src/behaviors/lidar_test_mode/OptimizedLidarTestMode.py
-
-CRITICAL: Follows project py_trees methodology instructions:
-- Does NOT handle ESC key directly (per instruction #9)
-- Returns Status.RUNNING to let exit_mode_behavior handle ESC
-- Uses memory=False in __init__.py to allow exit checking
-- Properly implements terminate() for cleanup when exit triggered
+Combined with working LiDAR obstacle detection and pygame plotting
 """
 
 import pygame
@@ -40,286 +33,6 @@ except ImportError:
     print("⚠️ DepthAI not available - will use fallback detection")
 
 
-class UltraStablePyRPLidarA3:
-    """Ultra-stable LiDAR class for robust obstacle detection"""
-    
-    def __init__(self, port='/dev/ttyUSB0', baudrate=256000, timeout=2.0):
-        self.port = port
-        self.baudrate = baudrate
-        self.timeout = timeout
-        self.lidar = None
-        self.is_connected = False
-        self.scan_generator = None
-        self.scan_iterator = None
-        
-        # Ultra-Stable Parameters
-        self.motor_pwm = 600
-        self.stability_mode = 4
-        self.current_mode = None
-
-    def connect(self):
-        """Connect to the LiDAR device"""
-        try:
-            self.lidar = PyRPlidar()
-            self.lidar.connect(port=self.port, baudrate=self.baudrate, timeout=self.timeout)
-            self.is_connected = True
-            return True
-        except Exception:
-            self.is_connected = False
-            return False
-
-    def disconnect(self):
-        """Graceful disconnect from the LiDAR device"""
-        try:
-            if self.lidar and self.is_connected:
-                self.lidar.stop()
-                time.sleep(0.5)
-                self.lidar.set_motor_pwm(0)
-                time.sleep(0.5)
-                self.lidar.disconnect()
-                self.is_connected = False
-        except Exception:
-            pass
-
-    def start_scanning(self, mode='ultra_stable'):
-        """Start scanning using ultra-stable settings"""
-        try:
-            if not self.is_connected:
-                return False
-                
-            self.lidar.stop()
-            time.sleep(1.0)
-            
-            self.lidar.set_motor_pwm(self.motor_pwm)
-            time.sleep(3.0)
-            
-            if mode == 'ultra_stable':
-                try:
-                    self.scan_generator = self.lidar.start_scan_express(self.stability_mode)
-                    self.scan_iterator = self.scan_generator()
-                    self.current_mode = 'stability'
-                    return True
-                except Exception:
-                    pass
-                
-                try:
-                    self.scan_generator = self.lidar.force_scan()
-                    self.scan_iterator = self.scan_generator()
-                    self.current_mode = 'force'
-                    return True
-                except Exception:
-                    return False
-            
-            return True
-            
-        except Exception:
-            return False
-
-    def get_scan_data_generator(self, shutdown_flag):
-        """Generator for scan data with stability improvements"""
-        scan_buffer = []
-        last_angle = None
-        consecutive_failures = 0
-        max_failures = 50
-        
-        while not shutdown_flag[0] and consecutive_failures < max_failures:
-            try:
-                measurement = next(self.scan_iterator)
-                
-                if measurement:
-                    consecutive_failures = 0
-                    
-                    try:
-                        quality = getattr(measurement, 'quality', 0)
-                        angle = getattr(measurement, 'angle', 0)
-                        distance = getattr(measurement, 'distance', 0)
-                        
-                        if quality > 8 and 200 < distance < 6000:
-                            scan_buffer.append((quality, angle, distance))
-                            
-                            if (last_angle is not None and 
-                                angle < last_angle and 
-                                len(scan_buffer) > 100):
-                                
-                                yield scan_buffer
-                                scan_buffer = []
-                            
-                            last_angle = angle
-                        
-                    except Exception:
-                        continue
-                else:
-                    consecutive_failures += 1
-                    time.sleep(0.1)
-                    continue
-                    
-            except StopIteration:
-                consecutive_failures += 1
-                scan_buffer.clear()
-                last_angle = None
-                continue
-            except Exception:
-                consecutive_failures += 1
-                time.sleep(0.15)
-
-
-class UltraStableLidarSystem:
-    """Ultra-stable LiDAR system for reliable robot navigation"""
-    
-    def __init__(self, port='/dev/ttyUSB0', baudrate=256000):
-        self.port = port
-        self.baudrate = baudrate
-        self.lidar = None
-        
-        # Ultra-stable data structures
-        self.scan_queue = queue.Queue(maxsize=2)
-        self.latest_obstacles = []
-        self.data_lock = threading.Lock()
-        
-        # Conservative obstacle mapping
-        self.obstacle_confidence = {}
-        self.scan_cycle_count = 0
-        self.angle_resolution = 1.0
-        self.distance_resolution = 50
-        
-        # Conservative confidence parameters
-        self.confidence_threshold = 0.15
-        self.confidence_increment = 0.25
-        self.confidence_decay = 0.05
-        self.max_confidence = 1.0
-        
-        # Performance monitoring
-        self.scan_rate = 0
-        self.last_scan_time = time.time()
-        self.scan_count = 0
-        
-        # Control flags
-        self.running = False
-        self.shutdown_flag = [False]
-        self.threads = []
-        
-    def data_acquisition_thread(self):
-        """Ultra-stable data acquisition thread"""
-        try:
-            self.lidar = UltraStablePyRPLidarA3(self.port, self.baudrate, timeout=2.0)
-            
-            if not self.lidar.connect():
-                return
-            
-            if not self.lidar.start_scanning('ultra_stable'):
-                return
-            
-            try:
-                for scan_data in self.lidar.get_scan_data_generator(self.shutdown_flag):
-                    if not self.running or self.shutdown_flag[0]:
-                        break
-                    
-                    try:
-                        if scan_data and len(scan_data) > 0:
-                            self.scan_count += 1
-                            current_time = time.time()
-                            if current_time - self.last_scan_time >= 5.0:
-                                self.scan_rate = self.scan_count / (current_time - self.last_scan_time)
-                                self.scan_count = 0
-                                self.last_scan_time = current_time
-                            
-                            self.update_obstacle_confidence_stable(scan_data)
-                            stable_obstacles = self.get_confident_obstacles()
-                            
-                            if len(stable_obstacles) > 0:
-                                with self.data_lock:
-                                    self.latest_obstacles = stable_obstacles
-                                    
-                                try:
-                                    self.scan_queue.put_nowait(stable_obstacles)
-                                except queue.Full:
-                                    try:
-                                        self.scan_queue.get_nowait()
-                                        self.scan_queue.put_nowait(stable_obstacles)
-                                    except queue.Empty:
-                                        pass
-                    
-                    except Exception:
-                        continue
-                        
-            except Exception:
-                pass
-                
-        except Exception:
-            pass
-        finally:
-            if self.lidar:
-                self.lidar.disconnect()
-
-    def update_obstacle_confidence_stable(self, scan_data):
-        """Update obstacle confidence with stable mapping"""
-        seen_obstacles = set()
-        
-        for quality, angle, distance in scan_data:
-            if quality > 8 and 200 < distance < 6000:
-                # Quantize for stability
-                quantized_angle = round(angle / self.angle_resolution) * self.angle_resolution
-                quantized_distance = round(distance / self.distance_resolution) * self.distance_resolution
-                
-                key = (quantized_angle, quantized_distance)
-                seen_obstacles.add(key)
-                
-                # Confidence update
-                current_confidence = self.obstacle_confidence.get(key, 0)
-                self.obstacle_confidence[key] = min(
-                    self.max_confidence, 
-                    current_confidence + self.confidence_increment
-                )
-        
-        # Decay for unseen obstacles
-        obstacles_to_remove = []
-        for key, confidence in list(self.obstacle_confidence.items()):
-            if key not in seen_obstacles:
-                new_confidence = confidence - self.confidence_decay
-                if new_confidence <= 0:
-                    obstacles_to_remove.append(key)
-                else:
-                    self.obstacle_confidence[key] = new_confidence
-        
-        for key in obstacles_to_remove:
-            del self.obstacle_confidence[key]
-    
-    def get_confident_obstacles(self):
-        """Get stable obstacles that exceed confidence threshold"""
-        stable_obstacles = []
-        for (angle, distance), confidence in self.obstacle_confidence.items():
-            if confidence >= self.confidence_threshold:
-                stable_obstacles.append((angle, distance))
-        return stable_obstacles
-    
-    def get_display_obstacles(self):
-        """Get obstacles for display"""
-        with self.data_lock:
-            return self.latest_obstacles.copy() if self.latest_obstacles else []
-    
-    def start(self):
-        """Start the LiDAR system"""
-        self.running = True
-        self.shutdown_flag[0] = False
-        
-        data_thread = threading.Thread(target=self.data_acquisition_thread, daemon=True)
-        data_thread.start()
-        self.threads.append(data_thread)
-        
-        return True
-    
-    def stop(self):
-        """Stop the system properly"""
-        self.running = False
-        self.shutdown_flag[0] = True
-        
-        for thread in self.threads:
-            thread.join(timeout=2.0)
-        
-        if self.lidar:
-            self.lidar.disconnect()
-
-
 class OptimizedDetectionSystem:
     """EXACT detection system from detection_consistency_test.py for <37px variance"""
     
@@ -328,6 +41,7 @@ class OptimizedDetectionSystem:
         self.device = None
         self.pipeline = None
         self.detection_queue = None
+        self.preview_queue = None
         self.has_detection = False
         self.camera_initialized = False
         
@@ -338,7 +52,7 @@ class OptimizedDetectionSystem:
         self.target_fps = 25
         
         # Detection settings - EXACT from standalone
-        self.confidence_threshold = 0.4
+        self.confidence_threshold = 0.4  # Lower threshold like standalone
         self.detection_skip_frames = 1
         self.frame_counter = 0
         
@@ -347,6 +61,11 @@ class OptimizedDetectionSystem:
         self.confidence_weights = deque(maxlen=5)
         self.smoothed_z_depth = 0
         self.depth_trust_threshold = 0.6
+        
+        # Performance tracking
+        self.fps_counter = deque(maxlen=30)
+        self.last_frame_time = time.time()
+        self.current_fps = 0.0
     
     def create_pipeline(self):
         """Create EXACT pipeline from detection_consistency_test.py"""
@@ -393,10 +112,10 @@ class OptimizedDetectionSystem:
             
             # EXACT detection network settings from standalone
             detection_nn = pipeline.create(dai.node.MobileNetSpatialDetectionNetwork)
-            detection_nn.setConfidenceThreshold(0.4)
+            detection_nn.setConfidenceThreshold(0.4)  # EXACT threshold
             detection_nn.setBlobPath(local_blob_path)
-            detection_nn.setBoundingBoxScaleFactor(0.5)
-            detection_nn.setDepthLowerThreshold(100)
+            detection_nn.setBoundingBoxScaleFactor(0.5)  # EXACT scale factor
+            detection_nn.setDepthLowerThreshold(100)    # EXACT thresholds
             detection_nn.setDepthUpperThreshold(8000)
             
             manip_nn.out.link(detection_nn.input)
@@ -420,6 +139,7 @@ class OptimizedDetectionSystem:
             return False
             
         try:
+            # Check for devices
             devices = dai.Device.getAllAvailableDevices()
             if len(devices) == 0:
                 print("⚠️ No OAK devices found")
@@ -429,9 +149,10 @@ class OptimizedDetectionSystem:
             if not self.pipeline:
                 return False
             
+            # Connect to device
             self.device = dai.Device(self.pipeline)
             
-            # Optimize device
+            # Optimize device - EXACT from standalone
             try:
                 if hasattr(self.device, 'setLogLevel'):
                     self.device.setLogLevel(dai.LogLevel.WARN)
@@ -447,10 +168,11 @@ class OptimizedDetectionSystem:
                 self.detection_queue = None
                 self.has_detection = False
             
+            # Wait for camera to stabilize
             time.sleep(2)
             
             self.camera_initialized = True
-            print("✅ Optimized detection system initialized")
+            print("✅ Optimized detection system initialized (using standalone settings)")
             return True
             
         except Exception as e:
@@ -501,6 +223,7 @@ class OptimizedDetectionSystem:
         try:
             self.frame_counter += 1
             
+            # Skip frames - EXACT from standalone
             if self.frame_counter % self.detection_skip_frames != 0:
                 return None
             
@@ -508,10 +231,12 @@ class OptimizedDetectionSystem:
             if not detections:
                 return None
             
+            # Filter for people (label 15)
             person_detections = [det for det in detections.detections if det.label == 15]
             if not person_detections:
                 return None
             
+            # Get closest person
             closest_person = min(person_detections, key=lambda p: p.spatialCoordinates.z)
             
             x_camera = closest_person.spatialCoordinates.x
@@ -522,8 +247,10 @@ class OptimizedDetectionSystem:
             if raw_z_depth <= 0 or raw_z_depth > 15000:
                 return None
             
+            # Apply smoothing
             smoothed_z_depth = self.smooth_z_depth(raw_z_depth, confidence)
             
+            # Calculate bounding box center
             bbox_xmin = closest_person.xmin
             bbox_xmax = closest_person.xmax
             bbox_ymin = closest_person.ymin
@@ -563,19 +290,15 @@ class OptimizedDetectionSystem:
             pass
 
 
-class LidarTestBehavior(MaxineBehavior):
-    """
-    Optimized LiDAR Test with standalone detection system for <37px variance
-    
-    PROPER py_trees implementation (per project instructions):
-    - Does NOT handle ESC directly - that's handled by exit_mode_behavior
-    - Always returns Status.RUNNING in update() 
-    - Implements proper terminate() for cleanup
-    - Works with memory=False in the py_trees Selector/Sequence
-    """
+# Import working LiDAR components from existing file
+from .LidarTestBehavior import UltraStableLidarSystem, EnhancedFacialAnimationRestorer
+
+
+class OptimizedLidarTestBehavior(MaxineBehavior):
+    """Optimized LiDAR Test with standalone detection system for <37px variance"""
     
     def __init__(self):
-        super().__init__("Optimized LiDAR Test")
+        super().__init__("Optimized LiDAR Test - Standalone Detection Integration")
         
         # Blackboard setup
         self.blackboard.register_key("TARGET_PERSON", access=py_trees.common.Access.READ)
@@ -583,9 +306,11 @@ class LidarTestBehavior(MaxineBehavior):
         self.blackboard.register_key("LIDAR_SYSTEM", access=py_trees.common.Access.WRITE)
         
         # Core components
-        self.detection_system = None
+        self.detection_system = None  # Will use OptimizedDetectionSystem
         self.lidar_system = None
         self.screen = None
+        self.head_tracker = None
+        self.facial_restorer = EnhancedFacialAnimationRestorer()
         self.initialized = False
         
         # Display parameters
@@ -594,6 +319,18 @@ class LidarTestBehavior(MaxineBehavior):
         self.scale = 0
         self.update_counter = 0
         self.display_update_rate = 3
+        
+        # Head tracking parameters - Conservative for stability
+        self.current_head_angle = 0.0
+        self.head_angle_lock = threading.Lock()
+        self.angle_history = []
+        self.max_angle_history = 5
+        self.last_sent_angle = None
+        self.angle_change_threshold = math.radians(8)
+        self.update_counter_tracking = 0
+        self.tracking_update_interval = 6
+        self.last_person_detected = 0
+        self.person_lost_timeout = 2.0
         
         # CSV LOGGING
         self.csv_log_filename = "LIDARTEST_OPTIMIZED.csv"
@@ -622,7 +359,7 @@ class LidarTestBehavior(MaxineBehavior):
         self.medium_term_variance = deque(maxlen=250)
         self.long_term_variance = deque(maxlen=1500)
         
-        # Stability zones
+        # Stability classification
         self.stability_zones = {
             'stable': 0, 'moderate': 0, 'unstable': 0, 'very_unstable': 0
         }
@@ -636,14 +373,12 @@ class LidarTestBehavior(MaxineBehavior):
         return True
     
     def initialise(self):
-        """Initialize when behavior starts - called by py_trees when mode changes"""
-        print("🎯 LiDAR Test initializing (ESC handled by py_trees exit behavior)...")
-        
+        """Initialize when behavior starts"""
         if not self.initialized:
             self.initialize_components()
         self.stop_robot()
         
-        # Reset tracking for new session
+        # Reset CSV logging for new session
         self.mode_start_time = time.time()
         self.csv_initialized = False
         self.detection_count = 0
@@ -672,7 +407,7 @@ class LidarTestBehavior(MaxineBehavior):
             # Initialize display
             display_info = pygame.display.Info()
             self.screen = pygame.display.set_mode((display_info.current_w, display_info.current_h), pygame.FULLSCREEN)
-            pygame.display.set_caption("MAXINE OPTIMIZED LIDAR TEST")
+            pygame.display.set_caption("MAXINE OPTIMIZED LIDAR TEST - <37px VARIANCE")
             
             self.center_x = display_info.current_w // 2
             self.center_y = display_info.current_h // 2
@@ -682,13 +417,28 @@ class LidarTestBehavior(MaxineBehavior):
             self.draw_clean_interface()
             pygame.display.flip()
             
-            # Initialize OPTIMIZED detection system
+            # Initialize OPTIMIZED detection system (from standalone)
             print("🎯 Initializing optimized detection system...")
             self.detection_system = OptimizedDetectionSystem()
             if self.detection_system.initialize():
                 print("✅ Optimized detection system ready")
             else:
                 print("⚠️ Using fallback detection")
+            
+            # Initialize head tracker
+            robot = self.get_robot()
+            if (hasattr(robot, 'head_velocity_manager') and robot.head_velocity_manager) or \
+               (hasattr(robot, 'servo_controller') and robot.servo_controller):
+                try:
+                    from src.behaviors.lidarchase.HeadTracker import HeadTracker
+                    self.head_tracker = HeadTracker(
+                        robot.head_velocity_manager if hasattr(robot, 'head_velocity_manager') else None,
+                        robot.servo_controller if hasattr(robot, 'servo_controller') else None
+                    )
+                    self.head_tracker.start_tracking()
+                    self.head_tracker.set_manual_position(0.0)
+                except Exception:
+                    self.head_tracker = None
             
             # Initialize LiDAR system
             self.start_stable_lidar()
@@ -716,12 +466,15 @@ class LidarTestBehavior(MaxineBehavior):
                     'mode_time_elapsed', 'timestamp', 'frame_number',
                     'x_midpoint_pixels', 'x_midpoint_normalized', 'x_camera_mm',
                     'z_depth_mm', 'confidence',
+                    'bbox_xmin', 'bbox_ymin', 'bbox_xmax', 'bbox_ymax', 'bbox_width', 'bbox_height',
+                    'x_jump_from_previous', 'is_large_jump',
                     'rolling_variance_pixels', 'rolling_std_dev_pixels', 'rolling_mean_pixels',
+                    'short_term_variance', 'medium_term_variance', 'long_term_variance',
                     'detection_count', 'consistent_detections', 'large_jumps_count',
-                    'stability_classification'
+                    'stability_classification', 'head_angle_deg', 'head_tracking_active'
                 ])
             self.csv_initialized = True
-            print(f"✅ CSV logging to: {self.csv_log_filename}")
+            print(f"✅ Optimized consistency logging to: {self.csv_log_filename}")
         except Exception as e:
             print(f"⚠️ CSV initialization failed: {e}")
     
@@ -734,13 +487,13 @@ class LidarTestBehavior(MaxineBehavior):
                 success = self.lidar_system.start()
                 if success:
                     self.blackboard.set("LIDAR_SYSTEM", self.lidar_system)
-                    print("✅ LiDAR system started")
+                    print("✅ LiDAR system started successfully")
                     time.sleep(3)
                 else:
-                    print("❌ Failed to start LiDAR")
+                    print("❌ Failed to start LiDAR system")
                     self.lidar_system = None
         except Exception as e:
-            print(f"❌ LiDAR error: {e}")
+            print(f"❌ LiDAR initialization error: {e}")
             self.lidar_system = None
     
     def get_person_detection(self):
@@ -761,7 +514,7 @@ class LidarTestBehavior(MaxineBehavior):
                 
                 return detection
         
-        # Fallback to robot's camera sensor
+        # Fallback to robot's camera sensor if available
         try:
             robot = self.get_robot()
             if not hasattr(robot, 'camera_sensor') or not robot.camera_sensor:
@@ -777,7 +530,7 @@ class LidarTestBehavior(MaxineBehavior):
             
             closest_person = people[0]
             
-            if closest_person.confidence < 0.4:
+            if closest_person.confidence < 0.4:  # Use same threshold as optimized
                 return None
             
             x_center_normalized = (closest_person.xmax + closest_person.xmin) / 2.0
@@ -907,6 +660,13 @@ class LidarTestBehavior(MaxineBehavior):
             if 0 <= x < self.screen.get_width() and 0 <= y < self.screen.get_height():
                 pygame.draw.circle(self.screen, color, (x, y), 8)
                 pygame.draw.circle(self.screen, (255, 255, 255), (x, y), 9, 2)
+                
+                # Show variance info
+                font = pygame.font.Font(None, 20)
+                x_pixels = bbox_center['x_pixels']
+                info_text = f"X:{x_pixels}px ±{self.current_std_dev_pixels:.1f}"
+                text_surface = font.render(info_text, True, color)
+                self.screen.blit(text_surface, (x + 10, y - 10))
             
             # Draw large x-coordinate information
             self.draw_person_x_coordinate_info(bbox_center)
@@ -926,19 +686,23 @@ class LidarTestBehavior(MaxineBehavior):
             medium_font = pygame.font.Font(None, 48)
             
             main_text = f"Person X-Center: {x_pixels}px"
-            detail_text = f"Variance: ±{self.current_std_dev_pixels:.1f}px | Target: <37px"
+            detail_text = f"Normalized: {x_norm:.3f} | Variance: ±{self.current_std_dev_pixels:.1f}px"
+            consistency_text = f"Detections: {self.detection_count} | Consistent: {self.consistent_detection_count} | Jumps: {self.large_jumps_count}"
             
             # Color based on consistency
-            if self.current_std_dev_pixels <= 37:
-                main_color = (0, 255, 0)  # Green - meeting target
+            if self.current_std_dev_pixels <= 10:
+                main_color = (0, 255, 0)
+            elif self.current_std_dev_pixels <= 25:
+                main_color = (255, 255, 0)
             elif self.current_std_dev_pixels <= 50:
-                main_color = (255, 255, 0)  # Yellow
+                main_color = (255, 165, 0)
             else:
-                main_color = (255, 0, 0)  # Red
+                main_color = (255, 0, 0)
             
             # Render text
             main_surface = large_font.render(main_text, True, main_color)
             detail_surface = medium_font.render(detail_text, True, (255, 255, 255))
+            consistency_surface = medium_font.render(consistency_text, True, (0, 255, 255))
             
             # Position text
             main_x = (screen_width - main_surface.get_width()) // 2
@@ -947,37 +711,123 @@ class LidarTestBehavior(MaxineBehavior):
             detail_x = (screen_width - detail_surface.get_width()) // 2
             detail_y = main_y + main_surface.get_height() + 10
             
+            consistency_x = (screen_width - consistency_surface.get_width()) // 2
+            consistency_y = detail_y + detail_surface.get_height() + 10
+            
+            # Draw background
+            total_height = main_surface.get_height() + detail_surface.get_height() + consistency_surface.get_height() + 30
+            max_width = max(main_surface.get_width(), detail_surface.get_width(), consistency_surface.get_width())
+            status_bg = pygame.Rect(main_x - 10, main_y - 5, max_width + 20, total_height)
+            
+            pygame.draw.rect(self.screen, (0, 0, 0), status_bg)
+            pygame.draw.rect(self.screen, main_color, status_bg, 3)
+            
             # Draw text
             self.screen.blit(main_surface, (main_x, main_y))
             self.screen.blit(detail_surface, (detail_x, detail_y))
+            self.screen.blit(consistency_surface, (consistency_x, consistency_y))
+            
+        except Exception:
+            pass
+    
+    def update_head_tracking(self, person_data):
+        """Conservative head tracking for stability"""
+        if not self.head_tracker or not person_data:
+            return
+        
+        try:
+            bbox_center = person_data['bbox_center']
+            x_pixels = bbox_center['x_pixels']
+            z_camera = person_data['z_camera']
+            
+            if z_camera <= 0:
+                return
+            
+            # Only process every N frames
+            self.update_counter_tracking += 1
+            if self.update_counter_tracking % self.tracking_update_interval != 0:
+                return
+            
+            # Calculate pixel-based angle
+            screen_center_x = self.screen.get_width() // 2 if self.screen else 960
+            pixel_offset = x_pixels - screen_center_x
+            pixel_offset_normalized = pixel_offset / screen_center_x
+            
+            # Convert to angle
+            camera_hfov_rad = math.radians(108)
+            raw_angle_rad = -pixel_offset_normalized * (camera_hfov_rad / 2.0)
+            
+            # Smooth angle
+            self.angle_history.append(raw_angle_rad)
+            if len(self.angle_history) > self.max_angle_history:
+                self.angle_history.pop(0)
+            
+            if len(self.angle_history) >= 2:
+                smoothed_angle_rad = sum(self.angle_history) / len(self.angle_history)
+            else:
+                smoothed_angle_rad = raw_angle_rad
+            
+            # Dead zone
+            dead_zone_rad = math.radians(12)
+            is_in_dead_zone = abs(smoothed_angle_rad) <= dead_zone_rad
+            
+            # Significant change check
+            significant_change = (self.last_sent_angle is None or 
+                                abs(smoothed_angle_rad - self.last_sent_angle) > self.angle_change_threshold)
+            
+            # Send command if needed
+            if (not is_in_dead_zone) and significant_change:
+                self.head_tracker.set_person_tracking(smoothed_angle_rad)
+                self.last_sent_angle = smoothed_angle_rad
+            
+            self.last_person_detected = time.time()
             
         except Exception:
             pass
     
     def draw_info(self, obstacle_count):
-        """Draw test information"""
+        """Draw test information with consistency metrics"""
         try:
+            tracking_status = "ON" if self.head_tracker else "OFF"
             lidar_status = "ACTIVE" if self.lidar_system else "INACTIVE"
             detection_status = "OPTIMIZED" if (self.detection_system and self.detection_system.camera_initialized) else "FALLBACK"
+            
+            current_head_angle = math.degrees(self.last_sent_angle) if self.last_sent_angle else 0.0
             consistency_rate = (self.consistent_detection_count / max(1, self.detection_count)) * 100
             
             info_lines = [
-                f"OPTIMIZED LIDAR TEST - Detection: {detection_status} | LiDAR: {lidar_status}",
-                f"Obstacles: {obstacle_count} | Consistency: {consistency_rate:.1f}%",
-                f"CSV: {self.csv_log_filename} | Press ESC to exit to IDLE mode"
+                f"OPTIMIZED LIDAR TEST - Detection: {detection_status} | LiDAR: {lidar_status} | Head: {tracking_status}",
+                f"LiDAR Obstacles: {obstacle_count} | Head: {current_head_angle:.1f}° | Target: <37px variance",
+                f"Detection Consistency: {consistency_rate:.1f}% | Variance: ±{self.current_std_dev_pixels:.1f}px",
+                f"Detections: {self.detection_count} | Large Jumps: {self.large_jumps_count}",
+                f"CSV Logging: {self.csv_log_filename} | ESC: Exit to Idle Mode"
             ]
             
-            y_offset = self.screen.get_height() - 100
+            y_offset = self.screen.get_height() - 150
             font = pygame.font.Font(None, 36)
             
             for i, line in enumerate(info_lines):
-                color = (0, 255, 255) if i == 0 else (255, 255, 255)
+                if i == 0:
+                    color = (0, 255, 255)
+                elif "Consistency" in line:
+                    if consistency_rate > 90:
+                        color = (0, 255, 0)
+                    elif consistency_rate > 80:
+                        color = (255, 255, 0)
+                    else:
+                        color = (255, 0, 0)
+                elif "CSV Logging" in line:
+                    color = (255, 165, 0)
+                else:
+                    color = (255, 255, 255)
+                
                 text_surface = font.render(line, True, color)
                 self.screen.blit(text_surface, (20, y_offset + i * 30))
             
         except Exception:
             pass
     
+    # Variance calculation methods
     def calculate_x_midpoint_variance(self):
         """Calculate real-time X midpoint variance"""
         try:
@@ -1060,6 +910,10 @@ class LidarTestBehavior(MaxineBehavior):
             stability_class = self.classify_stability(self.current_std_dev_pixels)
             self.stability_zones[stability_class] += 1
             
+            # Get head tracking info
+            head_angle_deg = math.degrees(self.last_sent_angle) if self.last_sent_angle else 0.0
+            head_tracking_active = self.head_tracker is not None
+            
             # Calculate elapsed time
             mode_elapsed = time.time() - self.mode_start_time
             
@@ -1070,9 +924,15 @@ class LidarTestBehavior(MaxineBehavior):
                     mode_elapsed, time.time(), self.update_counter,
                     x_midpoint_pixels, x_midpoint_normalized,
                     person_data['x_camera'], person_data['z_camera'], person_data['confidence'],
+                    person_data['bounding_box']['xmin'], person_data['bounding_box']['ymin'],
+                    person_data['bounding_box']['xmax'], person_data['bounding_box']['ymax'],
+                    person_data['bounding_box']['xmax'] - person_data['bounding_box']['xmin'],
+                    person_data['bounding_box']['ymax'] - person_data['bounding_box']['ymin'],
+                    x_jump, is_large_jump,
                     self.current_variance_pixels, self.current_std_dev_pixels, self.current_mean_pixels,
+                    short_var, medium_var, long_var,
                     self.detection_count, self.consistent_detection_count, self.large_jumps_count,
-                    stability_class
+                    stability_class, head_angle_deg, head_tracking_active
                 ])
         except Exception:
             pass
@@ -1095,16 +955,66 @@ class LidarTestBehavior(MaxineBehavior):
         except Exception:
             pass
     
+    def center_head_for_idle_mode(self):
+        """Center head for idle mode"""
+        try:
+            robot = self.get_robot()
+            
+            if hasattr(robot, 'servo_controller') and robot.servo_controller:
+                robot.servo_controller.center()
+                time.sleep(0.5)
+            elif hasattr(robot, 'head_velocity_manager') and robot.head_velocity_manager:
+                robot.head_velocity_manager.center_head()
+                time.sleep(0.5)
+                    
+        except Exception:
+            pass
+    
+    def perform_idle_mode_transition(self):
+        """Transition to IDLE mode with final summary"""
+        try:
+            # Generate final summary
+            if self.detection_count > 0:
+                overall_variance = statistics.variance(list(self.x_midpoints_pixels)) if len(self.x_midpoints_pixels) > 1 else 0
+                overall_std_dev = math.sqrt(overall_variance)
+                consistency_rate = (self.consistent_detection_count / self.detection_count) * 100
+                
+                print(f"\n📊 OPTIMIZED LIDAR TEST SUMMARY:")
+                print(f"   Total Detections: {self.detection_count}")
+                print(f"   Consistency Rate: {consistency_rate:.1f}%")
+                print(f"   Overall Std Dev: ±{overall_std_dev:.2f} pixels")
+                print(f"   Large Jumps: {self.large_jumps_count}")
+                print(f"   CSV Data: {self.csv_log_filename}")
+            
+            robot = self.get_robot()
+            
+            self.stop_robot()
+            self.center_head_for_idle_mode()
+            
+            if self.lidar_system:
+                print("🛑 Stopping LiDAR system...")
+                self.lidar_system.stop()
+                self.lidar_system = None
+                print("✅ LiDAR system stopped")
+            
+            if self.detection_system:
+                print("🛑 Stopping detection system...")
+                self.detection_system.shutdown()
+                self.detection_system = None
+                print("✅ Detection system stopped")
+            
+            if pygame.get_init():
+                pygame.event.clear()
+            
+            self.facial_restorer.restore_resting_face_immediately(robot)
+            
+            return True
+            
+        except Exception:
+            return False
+    
     def update(self) -> Status:
-        """
-        Main update method - PROPER py_trees implementation
-        
-        CRITICAL (per project instruction #9):
-        - Does NOT handle ESC or any keyboard events
-        - Exit behavior checks for ESC and handles mode change
-        - This behavior just runs and displays, returns RUNNING
-        - The Selector with memory=False allows exit checking each tick
-        """
+        """Main update method"""
         try:
             if not self.initialized:
                 if not self.initialize_components():
@@ -1112,17 +1022,29 @@ class LidarTestBehavior(MaxineBehavior):
             
             self.update_counter += 1
             
-            # Pump events to keep pygame responsive but don't consume them
-            # This prevents the "application not responding" issue
-            pygame.event.pump()
+            # Handle person detection and head tracking
+            person_data = self.get_person_detection()
+            if person_data:
+                self.update_head_tracking(person_data)
+            elif time.time() - self.last_person_detected > self.person_lost_timeout and self.head_tracker:
+                # Clear tracking when person is lost
+                self.angle_history.clear()
+                self.last_sent_angle = None
+                self.head_tracker.set_manual_position(0.0)
             
-            # Note: We do NOT use pygame.event.get() here!
-            # The exit_mode_behavior (KeyPressedCondition for ESC) needs to see events
-            # That behavior is in the Selector BEFORE this behavior
-            # It checks each tick because memory=False on the Selector
-            # When ESC is pressed, exit_mode_behavior returns SUCCESS
-            # This causes the Selector to return SUCCESS (first child succeeded)
-            # That ends this behavior and py_trees calls our terminate() method
+            # Handle events
+            for event in pygame.event.get():
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        self.perform_idle_mode_transition()
+                        robot = self.get_robot()
+                        robot.set_mode(RobotMode.IDLE)
+                        return Status.SUCCESS
+                elif event.type == pygame.QUIT:
+                    self.perform_idle_mode_transition()
+                    robot = self.get_robot()
+                    robot.set_mode(RobotMode.IDLE)
+                    return Status.SUCCESS
             
             # Display update
             if self.update_counter % self.display_update_rate == 0:
@@ -1150,78 +1072,52 @@ class LidarTestBehavior(MaxineBehavior):
                 except Exception as e:
                     print(f"Display error: {e}")
             
-            # ALWAYS return RUNNING
-            # The exit_mode_behavior in the Selector will check for ESC
-            # When ESC is pressed, it returns SUCCESS, which makes the Selector
-            # return SUCCESS, ending this behavior and calling terminate()
             return Status.RUNNING
             
         except Exception as e:
             print(f"Update error: {e}")
-            # Return RUNNING even on error
+            try:
+                self.stop_robot()
+                self.perform_idle_mode_transition()
+            except Exception:
+                pass
+            
             return Status.RUNNING
     
     def terminate(self, new_status: Status):
-        """
-        Terminate method - called when behavior stops
-        This is called by py_trees when exit_mode_behavior triggers
-        """
-        print("🔄 LiDAR Test terminating properly via py_trees...")
-        
+        """Terminate method with summary"""
         try:
-            # Stop robot movement
             self.stop_robot()
             
-            # Stop LiDAR system
+            if self.head_tracker:
+                self.head_tracker.stop_tracking()
+                self.head_tracker = None
+            
             if self.lidar_system:
-                print("🛑 Stopping LiDAR system...")
                 self.lidar_system.stop()
                 self.lidar_system = None
             
-            # Shutdown detection system
             if self.detection_system:
-                print("🛑 Stopping detection system...")
                 self.detection_system.shutdown()
                 self.detection_system = None
             
-            # Clean up blackboard
+            self.perform_idle_mode_transition()
+            
             try:
                 if self.blackboard.exists("LIDAR_SYSTEM"):
                     self.blackboard.unset("LIDAR_SYSTEM")
             except Exception:
                 pass
             
-            # Generate final summary if we have data
-            if self.detection_count > 0:
-                overall_variance = statistics.variance(list(self.x_midpoints_pixels)) if len(self.x_midpoints_pixels) > 1 else 0
-                overall_std_dev = math.sqrt(overall_variance)
-                consistency_rate = (self.consistent_detection_count / self.detection_count) * 100
-                
-                print(f"\n📊 LIDAR TEST FINAL SUMMARY:")
-                print(f"   Total Detections: {self.detection_count}")
-                print(f"   Consistency Rate: {consistency_rate:.1f}%")
-                print(f"   Overall Std Dev: ±{overall_std_dev:.2f} pixels")
-                print(f"   Target Met: {'✅ YES' if overall_std_dev < 37 else '❌ NO'} (target <37px)")
-                print(f"   CSV Data: {self.csv_log_filename}")
-            
-            # Clear pygame event queue to prevent issues
-            if pygame.get_init():
-                pygame.event.clear()
-            
             self.initialized = False
             
-            print("✅ LiDAR Test terminated successfully")
-            
-        except Exception as e:
-            print(f"⚠️ Termination error: {e}")
+        except Exception:
+            try:
+                self.center_head_for_idle_mode()
+                robot = self.get_robot()
+                if hasattr(robot, 'facial_animation_manager') and robot.facial_animation_manager:
+                    robot.facial_animation_manager.bring_to_front()
+            except:
+                pass
         
-        # Call parent terminate
         super().terminate(new_status)
-
-
-# Export with compatibility names
-OptimizedLidarTestBehavior = LidarTestBehavior
-ImprovedLidarTest = LidarTestBehavior
-StableLidarTest = LidarTestBehavior
-
-__all__ = ['LidarTestBehavior', 'OptimizedLidarTestBehavior', 'ImprovedLidarTest', 'StableLidarTest']

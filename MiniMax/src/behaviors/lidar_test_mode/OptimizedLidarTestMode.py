@@ -582,50 +582,65 @@ class LidarTestBehavior(MaxineBehavior):
         self.blackboard.register_key("HEAD_CENTER_POSITION", access=py_trees.common.Access.WRITE)
         self.blackboard.register_key("LIDAR_SYSTEM", access=py_trees.common.Access.WRITE)
         
-        # Core components
+        # Core components - UNCHANGED
         self.detection_system = None
         self.lidar_system = None
         self.screen = None
         self.initialized = False
         
-        # Display parameters
+        # Display parameters - UNCHANGED
         self.center_x = 0
         self.center_y = 0
         self.scale = 0
         self.update_counter = 0
         self.display_update_rate = 3
         
-        # CSV LOGGING
+        # CSV LOGGING - UNCHANGED
         self.csv_log_filename = "LIDARTEST_OPTIMIZED.csv"
         self.csv_initialized = False
         self.mode_start_time = time.time()
         
-        # X-midpoint consistency tracking
+        # X-midpoint consistency tracking - UNCHANGED
         self.x_midpoints_pixels = deque(maxlen=1000)
         self.x_midpoints_normalized = deque(maxlen=1000)
         self.variance_window = deque(maxlen=100)
         
-        # Real-time variance calculation
+        # Real-time variance calculation - UNCHANGED
         self.current_variance_pixels = 0.0
         self.current_std_dev_pixels = 0.0
         self.current_mean_pixels = 0.0
         
-        # Consistency metrics
+        # Consistency metrics - UNCHANGED
         self.detection_count = 0
         self.consistent_detection_count = 0
         self.large_jumps_count = 0
         self.jump_threshold_pixels = 50
         self.last_x_midpoint = None
         
-        # Multi-term variance tracking
+        # Multi-term variance tracking - UNCHANGED
         self.short_term_variance = deque(maxlen=75)
         self.medium_term_variance = deque(maxlen=250)
         self.long_term_variance = deque(maxlen=1500)
         
-        # Stability zones
+        # Stability zones - UNCHANGED
         self.stability_zones = {
             'stable': 0, 'moderate': 0, 'unstable': 0, 'very_unstable': 0
         }
+        
+        # HEAD TRACKING - NEW (Optional layer, doesn't affect existing functionality)
+        self.head_tracker = None
+        self.head_tracking_enabled = True  # Set to False to disable head tracking completely
+        
+        # Optimized head tracking parameters based on excellent ±4.23px variance
+        self.angle_history = []
+        self.max_angle_history = 3  # Reduced from 5 for faster response with stable detection
+        self.last_sent_angle = None
+        self.angle_change_threshold = math.radians(4)  # Reduced from 8° - more responsive with stable detection
+        self.tracking_update_interval = 3  # Reduced from 6 - 2x faster updates safe with low variance
+        self.dead_zone_degrees = 8  # Reduced from 12° - tighter tracking possible with ±4.23px variance
+        self.update_counter_tracking = 0
+        self.last_person_detected = 0
+        self.person_lost_timeout = 2.0
         
         if not pygame.get_init():
             pygame.init()
@@ -669,7 +684,7 @@ class LidarTestBehavior(MaxineBehavior):
             return True
         
         try:
-            # Initialize display
+            # Initialize display - UNCHANGED
             display_info = pygame.display.Info()
             self.screen = pygame.display.set_mode((display_info.current_w, display_info.current_h), pygame.FULLSCREEN)
             pygame.display.set_caption("MAXINE OPTIMIZED LIDAR TEST")
@@ -678,11 +693,11 @@ class LidarTestBehavior(MaxineBehavior):
             self.center_y = display_info.current_h // 2
             self.scale = min(display_info.current_w, display_info.current_h) // 7
             
-            # Draw initial interface
+            # Draw initial interface - UNCHANGED
             self.draw_clean_interface()
             pygame.display.flip()
             
-            # Initialize OPTIMIZED detection system
+            # Initialize OPTIMIZED detection system - UNCHANGED
             print("🎯 Initializing optimized detection system...")
             self.detection_system = OptimizedDetectionSystem()
             if self.detection_system.initialize():
@@ -690,11 +705,15 @@ class LidarTestBehavior(MaxineBehavior):
             else:
                 print("⚠️ Using fallback detection")
             
-            # Initialize LiDAR system
+            # Initialize LiDAR system - UNCHANGED
             self.start_stable_lidar()
             
-            # Initialize CSV logging
+            # Initialize CSV logging - UNCHANGED
             self.initialize_csv_log()
+            
+            # Initialize HEAD TRACKING - NEW (Optional, non-interfering)
+            if self.head_tracking_enabled:
+                self.initialize_head_tracker()
             
             self.initialized = True
             return True
@@ -703,6 +722,55 @@ class LidarTestBehavior(MaxineBehavior):
             print(f"Initialization error: {e}")
             self.initialized = False
             return False
+    
+    def initialize_head_tracker(self):
+        """Initialize head tracking system - NEW METHOD (optional, non-interfering)"""
+        try:
+            robot = self.get_robot()
+            
+            # Check if robot has head control capability
+            if hasattr(robot, 'servo_controller') and robot.servo_controller:
+                print("🎯 Initializing head tracking with servo controller...")
+                # Try to import HeadTracker if available
+                try:
+                    from src.behaviors.lidarchase.HeadTracker import HeadTracker
+                    self.head_tracker = HeadTracker(
+                        head_velocity_manager=None,
+                        servo_controller=robot.servo_controller
+                    )
+                    self.head_tracker.start_tracking()
+                    self.head_tracker.set_manual_position(0.0)  # Center head
+                    print("✅ Head tracking initialized (servo controller)")
+                except ImportError:
+                    print("⚠️ HeadTracker not available, trying direct servo control...")
+                    # Fallback to direct servo control
+                    robot.servo_controller.center()
+                    self.head_tracker = None
+                    
+            elif hasattr(robot, 'head_velocity_manager') and robot.head_velocity_manager:
+                print("🎯 Initializing head tracking with velocity manager...")
+                try:
+                    from src.behaviors.lidarchase.HeadTracker import HeadTracker
+                    self.head_tracker = HeadTracker(
+                        head_velocity_manager=robot.head_velocity_manager,
+                        servo_controller=None
+                    )
+                    self.head_tracker.start_tracking()
+                    self.head_tracker.set_manual_position(0.0)  # Center head
+                    print("✅ Head tracking initialized (velocity manager)")
+                except ImportError:
+                    print("⚠️ HeadTracker not available")
+                    self.head_tracker = None
+            else:
+                print("ℹ️ No head control available - head tracking disabled")
+                self.head_tracker = None
+                self.head_tracking_enabled = False
+                
+        except Exception as e:
+            print(f"⚠️ Head tracking initialization failed: {e}")
+            print("   Continuing without head tracking...")
+            self.head_tracker = None
+            self.head_tracking_enabled = False
     
     def initialize_csv_log(self):
         """Initialize CSV log"""
@@ -718,7 +786,7 @@ class LidarTestBehavior(MaxineBehavior):
                     'z_depth_mm', 'confidence',
                     'rolling_variance_pixels', 'rolling_std_dev_pixels', 'rolling_mean_pixels',
                     'detection_count', 'consistent_detections', 'large_jumps_count',
-                    'stability_classification'
+                    'stability_classification', 'head_angle_degrees', 'head_tracking_active'
                 ])
             self.csv_initialized = True
             print(f"✅ CSV logging to: {self.csv_log_filename}")
@@ -859,11 +927,11 @@ class LidarTestBehavior(MaxineBehavior):
         return obstacle_count
     
     def draw_person_detection(self):
-        """Draw person detection with consistency information"""
+        """Draw person detection with consistency information - UNCHANGED CORE FUNCTIONALITY"""
         person_data = self.get_person_detection()
         
         if not person_data:
-            return
+            return None  # Return None when no person
         
         try:
             x_camera = person_data['x_camera']
@@ -871,12 +939,12 @@ class LidarTestBehavior(MaxineBehavior):
             bbox_center = person_data['bbox_center']
             
             if z_camera <= 0:
-                return
+                return None
             
-            # Log consistency data
+            # Log consistency data - UNCHANGED
             self.log_detection_consistency_to_csv(person_data)
             
-            # Calculate angle and position for radar display
+            # Calculate angle and position for radar display - UNCHANGED
             person_angle_rad = math.atan2(x_camera, z_camera)
             person_angle_deg = math.degrees(person_angle_rad)
             
@@ -892,7 +960,7 @@ class LidarTestBehavior(MaxineBehavior):
             x = self.center_x + int(distance_m * self.scale * math.cos(display_angle_rad))
             y = self.center_y - int(distance_m * self.scale * math.sin(display_angle_rad))
             
-            # Color-code by stability
+            # Color-code by stability - UNCHANGED
             stability_class = self.classify_stability(self.current_std_dev_pixels)
             if stability_class == 'stable':
                 color = (0, 255, 0)
@@ -903,16 +971,18 @@ class LidarTestBehavior(MaxineBehavior):
             else:
                 color = (255, 0, 0)
             
-            # Draw detection
+            # Draw detection - UNCHANGED
             if 0 <= x < self.screen.get_width() and 0 <= y < self.screen.get_height():
                 pygame.draw.circle(self.screen, color, (x, y), 8)
                 pygame.draw.circle(self.screen, (255, 255, 255), (x, y), 9, 2)
             
-            # Draw large x-coordinate information
+            # Draw large x-coordinate information - UNCHANGED
             self.draw_person_x_coordinate_info(bbox_center)
             
+            return person_data  # Return the person data for head tracking
+            
         except Exception:
-            pass
+            return None
     
     def draw_person_x_coordinate_info(self, bbox_center):
         """Draw person's x-coordinate center with consistency info"""
@@ -954,7 +1024,111 @@ class LidarTestBehavior(MaxineBehavior):
         except Exception:
             pass
     
+    def update_head_tracking(self, person_data):
+        """Update head tracking based on person detection - NEW METHOD (optional layer)"""
+        if not self.head_tracking_enabled or not self.head_tracker or not person_data:
+            return
+        
+        try:
+            bbox_center = person_data['bbox_center']
+            x_pixels = bbox_center['x_pixels']
+            z_camera = person_data.get('z_camera', 0)
+            
+            if z_camera <= 0:
+                return
+            
+            # Only process every N frames (optimized for ±4.23px variance)
+            self.update_counter_tracking += 1
+            if self.update_counter_tracking % self.tracking_update_interval != 0:
+                return
+            
+            # Calculate pixel-based angle
+            screen_center_x = self.screen.get_width() // 2 if self.screen else 960
+            pixel_offset = x_pixels - screen_center_x
+            pixel_offset_normalized = pixel_offset / screen_center_x
+            
+            # Convert to angle with correct polarity
+            camera_hfov_rad = math.radians(108)  # Typical camera FOV
+            raw_angle_rad = -pixel_offset_normalized * (camera_hfov_rad / 2.0)
+            
+            # Smooth angle with optimized history for low variance
+            self.angle_history.append(raw_angle_rad)
+            if len(self.angle_history) > self.max_angle_history:
+                self.angle_history.pop(0)
+            
+            if len(self.angle_history) >= 2:
+                smoothed_angle_rad = sum(self.angle_history) / len(self.angle_history)
+            else:
+                smoothed_angle_rad = raw_angle_rad
+            
+            smoothed_angle_deg = math.degrees(smoothed_angle_rad)
+            
+            # Optimized dead zone for excellent detection stability
+            dead_zone_rad = math.radians(self.dead_zone_degrees)
+            is_in_dead_zone = abs(smoothed_angle_rad) <= dead_zone_rad
+            
+            # Check for significant change
+            significant_change = (self.last_sent_angle is None or 
+                                abs(smoothed_angle_rad - self.last_sent_angle) > self.angle_change_threshold)
+            
+            # Send head movement command if needed
+            if (not is_in_dead_zone) and significant_change:
+                self.head_tracker.set_person_tracking(smoothed_angle_rad)
+                self.last_sent_angle = smoothed_angle_rad
+            
+            self.last_person_detected = time.time()
+            
+        except Exception as e:
+            # Silently handle errors to not affect detection/LiDAR
+            pass
+    
+    def get_head_angle_degrees(self):
+        """Get current head angle in degrees for display/logging"""
+        if self.last_sent_angle is not None:
+            return math.degrees(self.last_sent_angle)
+        return 0.0
+    
     def draw_info(self, obstacle_count):
+        """Draw test information with head tracking status"""
+        try:
+            lidar_status = "ACTIVE" if self.lidar_system else "INACTIVE"
+            detection_status = "OPTIMIZED" if (self.detection_system and self.detection_system.camera_initialized) else "FALLBACK"
+            consistency_rate = (self.consistent_detection_count / max(1, self.detection_count)) * 100
+            
+            # Head tracking status - NEW
+            if self.head_tracker and self.head_tracking_enabled:
+                head_angle = self.get_head_angle_degrees()
+                head_status = f"HEAD: {head_angle:.1f}° (±{self.dead_zone_degrees}° dead zone)"
+            elif self.head_tracking_enabled:
+                head_status = "HEAD: Initializing..."
+            else:
+                head_status = "HEAD: Disabled"
+            
+            info_lines = [
+                f"OPTIMIZED LIDAR TEST - Detection: {detection_status} | LiDAR: {lidar_status}",
+                f"Obstacles: {obstacle_count} | Consistency: {consistency_rate:.1f}% | {head_status}",
+                f"Variance: ±{self.current_std_dev_pixels:.1f}px (Target <37px) | Detections: {self.detection_count}",
+                f"CSV: {self.csv_log_filename} | Press ESC to exit to IDLE mode"
+            ]
+            
+            y_offset = self.screen.get_height() - 120
+            font = pygame.font.Font(None, 36)
+            
+            for i, line in enumerate(info_lines):
+                color = (0, 255, 255) if i == 0 else (255, 255, 255)
+                if "Variance" in line:
+                    # Color code variance line
+                    if self.current_std_dev_pixels <= 10:
+                        color = (0, 255, 0)  # Green - excellent
+                    elif self.current_std_dev_pixels <= 37:
+                        color = (255, 255, 0)  # Yellow - good
+                    else:
+                        color = (255, 0, 0)  # Red - poor
+                text_surface = font.render(line, True, color)
+                self.screen.blit(text_surface, (20, y_offset + i * 30))
+            
+        except Exception:
+            pass
         """Draw test information"""
         try:
             lidar_status = "ACTIVE" if self.lidar_system else "INACTIVE"
@@ -1020,7 +1194,7 @@ class LidarTestBehavior(MaxineBehavior):
             return 'very_unstable'
     
     def log_detection_consistency_to_csv(self, person_data):
-        """Log detection consistency data"""
+        """Log detection consistency data with head tracking info"""
         try:
             if not self.csv_initialized:
                 self.initialize_csv_log()
@@ -1029,12 +1203,12 @@ class LidarTestBehavior(MaxineBehavior):
             x_midpoint_pixels = bbox_center['x_pixels']
             x_midpoint_normalized = bbox_center['x_normalized']
             
-            # Track midpoints
+            # Track midpoints - UNCHANGED
             self.x_midpoints_pixels.append(x_midpoint_pixels)
             self.x_midpoints_normalized.append(x_midpoint_normalized)
             self.variance_window.append(x_midpoint_pixels)
             
-            # Calculate jump
+            # Calculate jump - UNCHANGED
             x_jump = 0
             is_large_jump = False
             if self.last_x_midpoint is not None:
@@ -1045,25 +1219,29 @@ class LidarTestBehavior(MaxineBehavior):
             
             self.last_x_midpoint = x_midpoint_pixels
             
-            # Update counts
+            # Update counts - UNCHANGED
             self.detection_count += 1
             if not is_large_jump:
                 self.consistent_detection_count += 1
             
-            # Calculate variance metrics
+            # Calculate variance metrics - UNCHANGED
             self.current_variance_pixels, self.current_std_dev_pixels, self.current_mean_pixels = self.calculate_x_midpoint_variance()
             
-            # Calculate multi-term variance
+            # Calculate multi-term variance - UNCHANGED
             short_var, medium_var, long_var = self.calculate_multi_term_variance(x_midpoint_pixels)
             
-            # Classify stability
+            # Classify stability - UNCHANGED
             stability_class = self.classify_stability(self.current_std_dev_pixels)
             self.stability_zones[stability_class] += 1
             
-            # Calculate elapsed time
+            # Calculate elapsed time - UNCHANGED
             mode_elapsed = time.time() - self.mode_start_time
             
-            # Write to CSV
+            # Get head tracking info - NEW
+            head_angle_deg = self.get_head_angle_degrees()
+            head_tracking_active = self.head_tracker is not None and self.head_tracking_enabled
+            
+            # Write to CSV with head tracking data
             with open(self.csv_log_filename, 'a', newline='') as csvfile:
                 writer = csv.writer(csvfile)
                 writer.writerow([
@@ -1072,13 +1250,13 @@ class LidarTestBehavior(MaxineBehavior):
                     person_data['x_camera'], person_data['z_camera'], person_data['confidence'],
                     self.current_variance_pixels, self.current_std_dev_pixels, self.current_mean_pixels,
                     self.detection_count, self.consistent_detection_count, self.large_jumps_count,
-                    stability_class
+                    stability_class, head_angle_deg, head_tracking_active
                 ])
         except Exception:
-            pass
+            pass  # Silent fail to not affect detection
     
     def stop_robot(self):
-        """Stop robot movement"""
+        """Stop robot movement (wheels only, not head)"""
         try:
             robot = self.get_robot()
             
@@ -1124,7 +1302,7 @@ class LidarTestBehavior(MaxineBehavior):
             # This causes the Selector to return SUCCESS (first child succeeded)
             # That ends this behavior and py_trees calls our terminate() method
             
-            # Display update
+            # Display update and get person detection
             if self.update_counter % self.display_update_rate == 0:
                 try:
                     if self.screen:
@@ -1132,17 +1310,30 @@ class LidarTestBehavior(MaxineBehavior):
                         self.draw_radar_grid()
                         self.draw_robot()
                         
-                        # Draw LiDAR obstacles
+                        # Draw LiDAR obstacles - UNCHANGED
                         obstacle_count = 0
                         if self.lidar_system:
                             obstacles = self.lidar_system.get_display_obstacles()
                             if obstacles:
                                 obstacle_count = self.draw_lidar_data(obstacles)
                         
-                        # Draw person detection
-                        self.draw_person_detection()
+                        # Draw person detection and get data for head tracking
+                        person_data = self.draw_person_detection()
                         
-                        # Draw info
+                        # Update head tracking with person data - NEW
+                        if person_data and self.head_tracking_enabled:
+                            self.update_head_tracking(person_data)
+                        elif self.head_tracker and time.time() - self.last_person_detected > self.person_lost_timeout:
+                            # Person lost - center head
+                            try:
+                                self.angle_history.clear()
+                                self.last_sent_angle = None
+                                if self.head_tracker:
+                                    self.head_tracker.set_manual_position(0.0)
+                            except Exception:
+                                pass  # Silently handle to not affect other systems
+                        
+                        # Draw info - Will show head tracking status
                         self.draw_info(obstacle_count)
                         
                         pygame.display.flip()
@@ -1169,29 +1360,51 @@ class LidarTestBehavior(MaxineBehavior):
         print("🔄 LiDAR Test terminating properly via py_trees...")
         
         try:
-            # Stop robot movement
+            # Stop robot movement - UNCHANGED
             self.stop_robot()
             
-            # Stop LiDAR system
+            # Stop head tracking - NEW (optional cleanup)
+            if self.head_tracker:
+                print("🛑 Stopping head tracking...")
+                try:
+                    # Center head before stopping
+                    self.head_tracker.set_manual_position(0.0)
+                    time.sleep(0.5)
+                    self.head_tracker.stop_tracking()
+                except Exception as e:
+                    print(f"   Head tracking cleanup warning: {e}")
+                self.head_tracker = None
+            elif self.head_tracking_enabled:
+                # Try to center head directly if no tracker
+                try:
+                    robot = self.get_robot()
+                    if hasattr(robot, 'servo_controller') and robot.servo_controller:
+                        robot.servo_controller.center()
+                    elif hasattr(robot, 'head_velocity_manager') and robot.head_velocity_manager:
+                        robot.head_velocity_manager.center_head()
+                except Exception:
+                    pass
+            
+            # Stop LiDAR system - UNCHANGED
             if self.lidar_system:
                 print("🛑 Stopping LiDAR system...")
                 self.lidar_system.stop()
                 self.lidar_system = None
             
-            # Shutdown detection system
+            # Shutdown detection system - UNCHANGED
             if self.detection_system:
                 print("🛑 Stopping detection system...")
                 self.detection_system.shutdown()
                 self.detection_system = None
             
-            # Clean up blackboard
+            # Clean up blackboard - UNCHANGED
             try:
                 if self.blackboard.exists("LIDAR_SYSTEM"):
                     self.blackboard.unset("LIDAR_SYSTEM")
             except Exception:
                 pass
             
-            # Generate final summary if we have data
+            # Generate final summary - ENHANCED with head tracking info
             if self.detection_count > 0:
                 overall_variance = statistics.variance(list(self.x_midpoints_pixels)) if len(self.x_midpoints_pixels) > 1 else 0
                 overall_std_dev = math.sqrt(overall_variance)
@@ -1202,9 +1415,10 @@ class LidarTestBehavior(MaxineBehavior):
                 print(f"   Consistency Rate: {consistency_rate:.1f}%")
                 print(f"   Overall Std Dev: ±{overall_std_dev:.2f} pixels")
                 print(f"   Target Met: {'✅ YES' if overall_std_dev < 37 else '❌ NO'} (target <37px)")
+                print(f"   Head Tracking: {'Enabled' if self.head_tracking_enabled else 'Disabled'}")
                 print(f"   CSV Data: {self.csv_log_filename}")
             
-            # Clear pygame event queue to prevent issues
+            # Clear pygame event queue - UNCHANGED
             if pygame.get_init():
                 pygame.event.clear()
             
@@ -1215,7 +1429,7 @@ class LidarTestBehavior(MaxineBehavior):
         except Exception as e:
             print(f"⚠️ Termination error: {e}")
         
-        # Call parent terminate
+        # Call parent terminate - UNCHANGED
         super().terminate(new_status)
 
 

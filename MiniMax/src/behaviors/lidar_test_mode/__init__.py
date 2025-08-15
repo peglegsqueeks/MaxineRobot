@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-LiDAR Test Mode Package - Including Coordinate Verification
+LiDAR Test Mode Package - Including Potential Field Visualization
 Located at: src/behaviors/lidar_test_mode/__init__.py
 """
 
@@ -8,50 +8,58 @@ import py_trees
 from src.behaviors.utils import make_press_esc_to_exit_behavior
 from src.types.RobotModes import RobotMode
 
-# Try to import the coordinate verification version first
+# Try to import the potential field visualization version first
 LIDAR_TEST_AVAILABLE = False
 LidarTestBehavior = None
 
 try:
-    # Try coordinate verification version first (NEW)
-    from .CoordinateVerificationLidarTest import CoordinateVerificationLidarTest as LidarTestBehavior
-    print("✅ Using CoordinateVerificationLidarTest with coordinate alignment metrics")
+    # Try potential field visualization version first (NEW TOP PRIORITY)
+    from .PotentialFieldVisualizationTest import PotentialFieldVisualizationTest as LidarTestBehavior
+    print("✅ Using PotentialFieldVisualizationTest with force grid overlay and navigation")
     LIDAR_TEST_AVAILABLE = True
 except ImportError as e:
-    print(f"⚠️ CoordinateVerificationLidarTest not available: {e}")
+    print(f"⚠️ PotentialFieldVisualizationTest not available: {e}")
     
-    # Try optimized version with <37px variance detection
     try:
-        from .OptimizedLidarTestMode import LidarTestBehavior
-        print("✅ Using OptimizedLidarTestMode with <37px variance detection")
+        # Try coordinate verification version second
+        from .CoordinateVerificationLidarTest import CoordinateVerificationLidarTest as LidarTestBehavior
+        print("✅ Using CoordinateVerificationLidarTest with coordinate alignment metrics")
         LIDAR_TEST_AVAILABLE = True
     except ImportError as e:
-        print(f"⚠️ OptimizedLidarTestMode not available: {e}")
+        print(f"⚠️ CoordinateVerificationLidarTest not available: {e}")
         
-        # Try standard version with variance tracking
+        # Try optimized version with <37px variance detection
         try:
-            from .LidarTestBehavior import StableLidarTest as LidarTestBehavior
-            print("✅ Using standard LidarTestBehavior with variance tracking")
+            from .OptimizedLidarTestMode import LidarTestBehavior
+            print("✅ Using OptimizedLidarTestMode with <37px variance detection")
             LIDAR_TEST_AVAILABLE = True
         except ImportError as e:
-            print(f"❌ Failed to import LidarTestBehavior: {e}")
+            print(f"⚠️ OptimizedLidarTestMode not available: {e}")
             
-            # Try ImprovedLidarTest as fallback
+            # Try standard version with variance tracking
             try:
-                from .ImprovedLidarTest import ImprovedLidarTest as LidarTestBehavior
-                print("⚠️ Using ImprovedLidarTest (fallback mode)")
+                from .LidarTestBehavior import StableLidarTest as LidarTestBehavior
+                print("✅ Using standard LidarTestBehavior with variance tracking")
                 LIDAR_TEST_AVAILABLE = True
-            except ImportError:
-                print("❌ Failed to import ImprovedLidarTest")
+            except ImportError as e:
+                print(f"❌ Failed to import LidarTestBehavior: {e}")
                 
-                # Last resort - standalone test
+                # Try ImprovedLidarTest as fallback
                 try:
-                    from .StandaloneLidarTest import ExactStandaloneLidarTest as LidarTestBehavior
-                    print("⚠️ Using StandaloneLidarTest (basic mode)")
+                    from .ImprovedLidarTest import ImprovedLidarTest as LidarTestBehavior
+                    print("⚠️ Using ImprovedLidarTest (fallback mode)")
                     LIDAR_TEST_AVAILABLE = True
                 except ImportError:
-                    print("❌ No LiDAR test behaviors available!")
-                    LIDAR_TEST_AVAILABLE = False
+                    print("❌ Failed to import ImprovedLidarTest")
+                    
+                    # Last resort - standalone test
+                    try:
+                        from .StandaloneLidarTest import ExactStandaloneLidarTest as LidarTestBehavior
+                        print("⚠️ Using StandaloneLidarTest (basic mode)")
+                        LIDAR_TEST_AVAILABLE = True
+                    except ImportError:
+                        print("❌ No LiDAR test behaviors available!")
+                        LIDAR_TEST_AVAILABLE = False
 
 
 def make_lidar_test_sub_tree():
@@ -65,11 +73,12 @@ def make_lidar_test_sub_tree():
     - Exit behavior checks for ESC and returns to IDLE
     
     Priority order for behaviors:
-    1. CoordinateVerificationLidarTest (coordinate alignment testing)
-    2. OptimizedLidarTestMode with <37px variance (performance)
-    3. Standard LidarTestBehavior with variance tracking
-    4. ImprovedLidarTest (fallback)
-    5. StandaloneLidarTest (basic)
+    1. PotentialFieldVisualizationTest (force grid + navigation visualization)
+    2. CoordinateVerificationLidarTest (coordinate alignment testing)
+    3. OptimizedLidarTestMode with <37px variance (performance)
+    4. Standard LidarTestBehavior with variance tracking
+    5. ImprovedLidarTest (fallback)
+    6. StandaloneLidarTest (basic)
     """
     
     if not LIDAR_TEST_AVAILABLE or LidarTestBehavior is None:

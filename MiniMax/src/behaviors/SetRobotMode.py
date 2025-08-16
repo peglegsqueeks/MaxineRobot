@@ -23,7 +23,7 @@ class SetRobotMode(MaxineBehavior):
         RobotMode.HEADTURN: CameraMode.DISABLED,
         RobotMode.DIAGNOSTIC: CameraMode.DISABLED,
         RobotMode.PLAYGAME: CameraMode.DISABLED,
-        RobotMode.LIDAR_TEST: CameraMode.OBJECT_DETECTION,
+        RobotMode.LIDAR_TEST: CameraMode.DISABLED,  # CHANGED: Set to DISABLED as requested
         RobotMode.HEAD_ALIGN: CameraMode.DISABLED,
     }
 
@@ -103,51 +103,14 @@ class SetRobotMode(MaxineBehavior):
             
             # Handle TTS announcement with error handling
             try:
-                if hasattr(robot, 'speech_manager') and robot.speech_manager:
-                    saying = self.MODE_SAYING.get(self.mode, self.mode.name)
-                    robot.speech_manager.perform_action(saying)
-                    print(f"🔊 TTS announced: {saying}")
-                else:
-                    print(f"⚠️ No speech manager available for mode announcement")
+                if hasattr(robot, 'tts') and robot.tts and self.mode in self.MODE_SAYING:
+                    robot.tts.say_text(self.MODE_SAYING[self.mode])
+                    print(f"🔊 TTS announcement: {self.MODE_SAYING[self.mode]}")
             except Exception as e:
-                print(f"⚠️ TTS error for {self.mode.name}: {e}, but continuing")
+                print(f"⚠️ TTS announcement failed for {self.mode.name}: {e}, but continuing")
             
-            # CRITICAL: Always return SUCCESS to prevent robot shutdown
-            print(f"✅ Successfully switched to {self.mode.name} mode")
             return Status.SUCCESS
             
         except Exception as e:
-            print(f"❌ CRITICAL ERROR setting robot mode to {self.mode.name}: {e}")
-            # CRITICAL: Even on error, return SUCCESS to prevent robot shutdown
-            # The mode might still have been set even if other things failed
-            return Status.SUCCESS
-
-
-class SafeSetRobotMode(MaxineBehavior):
-    """
-    Ultra-safe robot mode setter that NEVER fails
-    """
-    
-    def __init__(self, mode: RobotMode):
-        super().__init__(f"Safe Set to {mode.name} mode")
-        self.mode = mode
-    
-    def update(self) -> Status:
-        """Ultra-safe mode setting that cannot fail"""
-        try:
-            print(f"🔄 SAFE mode switch to {self.mode.name}")
-            
-            robot = self.get_robot()
-            
-            # Only do the most basic mode setting
-            robot.set_mode(self.mode)
-            
-            print(f"✅ SAFE mode switch to {self.mode.name} completed")
-            
-            # Always return SUCCESS
-            return Status.SUCCESS
-            
-        except Exception as e:
-            print(f"⚠️ Even SAFE mode switch had error: {e}")
-            # Still return SUCCESS to prevent robot shutdown
-            return Status.SUCCESS
+            print(f"❌ CRITICAL: Failed to set robot mode {self.mode.name}: {e}")
+            return Status.FAILURE

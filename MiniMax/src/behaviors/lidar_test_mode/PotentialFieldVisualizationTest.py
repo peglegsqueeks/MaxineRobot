@@ -34,10 +34,16 @@ from .CoordinateVerificationLidarTest import CoordinateVerificationLidarTest
 # Import potential field navigation
 from .PotentialFieldNavigation import PotentialFieldNavigator, PotentialFieldConfig, Vector2D
 
+# EXACT IMPORTS from detection_consistency_test.py
 try:
     import depthai as dai
-except ImportError:
-    dai = None
+    import cv2
+    import numpy as np
+    DEPTHAI_AVAILABLE = True
+except ImportError as e:
+    print(f"❌ Missing required libraries: {e}")
+    DEPTHAI_AVAILABLE = False
+
 
 class PotentialFieldVisualizationTest(CoordinateVerificationLidarTest):
     """
@@ -73,6 +79,31 @@ class PotentialFieldVisualizationTest(CoordinateVerificationLidarTest):
         # Override behavior name and CSV filename
         self.name = "Potential Field Visualization Test"
         self.csv_log_filename = "POTENTIAL_FIELD_NAVIGATION.csv"
+        
+        # EXACT COPY: Camera system from detection_consistency_test.py (OPTIONAL enhancement)
+        self.exact_device = None
+        self.exact_pipeline = None
+        self.exact_detection_queue = None
+        self.exact_preview_queue = None
+        self.exact_has_detection = False
+        self.exact_camera_initialized = False
+        self.exact_camera_error_message = ""
+        
+        # EXACT COPY: Camera settings from detection_consistency_test.py
+        self.exact_camera_resolution_width = 300
+        self.exact_camera_resolution_height = 300
+        self.exact_camera_hfov_degrees = 114
+        self.exact_target_fps = 25
+        
+        # EXACT COPY: Detection settings from detection_consistency_test.py
+        self.exact_detection_skip_frames = 1
+        self.exact_frame_counter = 0
+        
+        # EXACT COPY: Z-depth smoothing from detection_consistency_test.py
+        self.exact_z_depth_smoother = deque(maxlen=5)
+        self.exact_confidence_weights = deque(maxlen=5)
+        self.exact_smoothed_z_depth = 0
+        self.exact_depth_trust_threshold = 0.6
         
         # PERFORMANCE OPTIMIZATIONS
         self.display_update_rate = 6  # Update display less frequently (was 3)
@@ -116,6 +147,216 @@ class PotentialFieldVisualizationTest(CoordinateVerificationLidarTest):
         self.applied_offset_x = 0  # Current offset being applied to camera detections
         self.applied_offset_y = 0  # Current offset being applied to camera detections
         self.offset_calculated = False  # Whether we have calculated an offset from data
+    
+    def check_exact_camera_connection(self):
+        """EXACT COPY from detection_consistency_test.py"""
+        try:
+            devices = dai.Device.getAllAvailableDevices()
+            return len(devices) > 0, f"Found {len(devices)} device(s)"
+        except Exception as e:
+            return False, f"Device detection error: {str(e)}"
+    
+    def create_exact_pipeline(self):
+        """EXACT COPY from detection_consistency_test.py"""
+        try:
+            pipeline = dai.Pipeline()
+            
+            local_blob_path = "./mobilenet-ssd_openvino_2021.4_5shave.blob"
+            if not os.path.exists(local_blob_path):
+                raise Exception(f"Blob file not found: {local_blob_path}")
+            
+            # EXACT COPY: Working camera setup
+            mono_left = pipeline.create(dai.node.MonoCamera)
+            mono_left.setResolution(dai.MonoCameraProperties.SensorResolution.THE_800_P)
+            mono_left.setBoardSocket(dai.CameraBoardSocket.CAM_B)
+            mono_left.setFps(self.exact_target_fps)
+            
+            mono_right = pipeline.create(dai.node.MonoCamera)
+            mono_right.setResolution(dai.MonoCameraProperties.SensorResolution.THE_800_P)
+            mono_right.setBoardSocket(dai.CameraBoardSocket.CAM_C)
+            mono_right.setFps(self.exact_target_fps)
+            
+            # EXACT COPY: Working ImageManip setup
+            manip_nn = pipeline.create(dai.node.ImageManip)
+            manip_nn.initialConfig.setResize(300, 300)
+            manip_nn.initialConfig.setKeepAspectRatio(False)
+            manip_nn.initialConfig.setFrameType(dai.ImgFrame.Type.BGR888p)
+            mono_right.out.link(manip_nn.inputImage)
+            
+            # EXACT COPY: Working stereo depth settings
+            depth = pipeline.create(dai.node.StereoDepth)
+            depth.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.DEFAULT)
+            depth.initialConfig.setMedianFilter(dai.MedianFilter.KERNEL_7x7)
+            depth.initialConfig.setConfidenceThreshold(180)
+            depth.setLeftRightCheck(True)
+            depth.setSubpixel(False)
+            depth.setDepthAlign(dai.CameraBoardSocket.CAM_C)
+            
+            mono_left.out.link(depth.left)
+            mono_right.out.link(depth.right)
+            
+            # EXACT COPY: Working detection network settings
+            detection_nn = pipeline.create(dai.node.MobileNetSpatialDetectionNetwork)
+            detection_nn.setConfidenceThreshold(0.4)  # EXACT same threshold
+            detection_nn.setBlobPath(local_blob_path)
+            detection_nn.setBoundingBoxScaleFactor(0.5)  # EXACT same scale
+            detection_nn.setDepthLowerThreshold(100)    # EXACT same threshold
+            detection_nn.setDepthUpperThreshold(8000)   # EXACT same threshold
+            
+            manip_nn.out.link(detection_nn.input)
+            depth.depth.link(detection_nn.inputDepth)
+            
+            # Outputs
+            detection_out = pipeline.create(dai.node.XLinkOut)
+            detection_out.setStreamName("detections")
+            detection_nn.out.link(detection_out.input)
+            
+            return pipeline
+        except Exception:
+            return None
+    
+    def initialize_exact_camera(self):
+        """EXACT COPY from detection_consistency_test.py"""
+        if not DEPTHAI_AVAILABLE:
+            self.exact_camera_error_message = "DepthAI not available"
+            return False
+            
+        try:
+            connected, message = self.check_exact_camera_connection()
+            if not connected:
+                self.exact_camera_error_message = message
+                return False
+            
+            self.exact_pipeline = self.create_exact_pipeline()
+            if not self.exact_pipeline:
+                self.exact_camera_error_message = "Pipeline creation failed"
+                return False
+            
+            try:
+                self.exact_device = dai.Device(self.exact_pipeline)
+            except Exception as e:
+                self.exact_camera_error_message = f"Device connection failed: {str(e)}"
+                return False
+            
+            # Optimize device
+            try:
+                if hasattr(self.exact_device, 'setLogLevel'):
+                    self.exact_device.setLogLevel(dai.LogLevel.WARN)
+                self.exact_device.setIrLaserDotProjectorIntensity(900)
+            except Exception:
+                pass
+            
+            # Get queues
+            try:
+                self.exact_detection_queue = self.exact_device.getOutputQueue("detections", maxSize=4, blocking=False)
+                self.exact_has_detection = True
+            except Exception:
+                self.exact_detection_queue = None
+                self.exact_has_detection = False
+            
+            time.sleep(2)
+            self.exact_camera_initialized = True
+            print("✅ Exact camera system initialized")
+            return True
+        except Exception as e:
+            self.exact_camera_error_message = f"Camera initialization error: {str(e)}"
+            print(f"⚠️ Exact camera initialization failed: {e}")
+            return False
+    
+    def exact_smooth_z_depth(self, raw_z_depth, confidence):
+        """EXACT COPY from detection_consistency_test.py"""
+        try:
+            self.exact_z_depth_smoother.append(raw_z_depth)
+            self.exact_confidence_weights.append(confidence)
+            
+            if len(self.exact_z_depth_smoother) < 2:
+                self.exact_smoothed_z_depth = raw_z_depth
+                return raw_z_depth
+            
+            total_weight = 0
+            weighted_sum = 0
+            
+            for i, (z_val, conf) in enumerate(zip(self.exact_z_depth_smoother, self.exact_confidence_weights)):
+                recency_weight = (i + 1) / len(self.exact_z_depth_smoother)
+                confidence_weight = max(0.1, conf)
+                combined_weight = recency_weight * confidence_weight
+                
+                weighted_sum += z_val * combined_weight
+                total_weight += combined_weight
+            
+            smoothed = weighted_sum / total_weight if total_weight > 0 else raw_z_depth
+            
+            if confidence < self.exact_depth_trust_threshold and len(self.exact_z_depth_smoother) > 1:
+                prev_z = self.exact_z_depth_smoother[-2]
+                max_jump = 500
+                if abs(smoothed - prev_z) > max_jump:
+                    blend_factor = confidence / self.exact_depth_trust_threshold
+                    smoothed = prev_z + (smoothed - prev_z) * blend_factor
+            
+            self.exact_smoothed_z_depth = smoothed
+            return smoothed
+        except Exception:
+            return raw_z_depth
+
+    def get_person_detection(self):
+        """OVERRIDE parent to use EXACT detection_consistency_test.py system when available"""
+        # Try exact camera system first if available
+        if self.exact_has_detection and self.exact_detection_queue and self.exact_camera_initialized:
+            try:
+                self.exact_frame_counter += 1
+                if self.exact_frame_counter % self.exact_detection_skip_frames == 0:
+                    
+                    detections = self.exact_detection_queue.tryGet()
+                    if detections:
+                        person_detections = [det for det in detections.detections if det.label == 15]
+                        if person_detections:
+                            closest_person = min(person_detections, key=lambda p: p.spatialCoordinates.z)
+                            
+                            x_camera = closest_person.spatialCoordinates.x
+                            y_camera = closest_person.spatialCoordinates.y
+                            raw_z_depth = closest_person.spatialCoordinates.z
+                            confidence = closest_person.confidence
+                            
+                            if raw_z_depth > 0 and raw_z_depth <= 15000:
+                                smoothed_z_depth = self.exact_smooth_z_depth(raw_z_depth, confidence)
+                                
+                                # Calculate X midpoint for consistency tracking
+                                bbox_xmin = closest_person.xmin
+                                bbox_xmax = closest_person.xmax
+                                bbox_ymin = closest_person.ymin
+                                bbox_ymax = closest_person.ymax
+                                
+                                x_midpoint_normalized = (bbox_xmin + bbox_xmax) / 2.0
+                                y_midpoint_normalized = (bbox_ymin + bbox_ymax) / 2.0
+                                x_midpoint_pixels = int(x_midpoint_normalized * self.screen.get_width()) if self.screen else 0
+                                y_midpoint_pixels = int(y_midpoint_normalized * self.screen.get_height()) if self.screen else 0
+                                
+                                # Format to match parent's expected format
+                                return {
+                                    'x_camera': x_camera,
+                                    'y_camera': y_camera,
+                                    'z_camera': smoothed_z_depth,
+                                    'confidence': confidence,
+                                    'bbox_center': {
+                                        'x_normalized': x_midpoint_normalized,
+                                        'y_normalized': y_midpoint_normalized,
+                                        'x_pixels': x_midpoint_pixels,
+                                        'y_pixels': y_midpoint_pixels
+                                    },
+                                    'bbox_xmin': bbox_xmin,
+                                    'bbox_ymin': bbox_ymin,
+                                    'bbox_xmax': bbox_xmax,
+                                    'bbox_ymax': bbox_ymax,
+                                    'detection_method': 'EXACT_CAMERA'
+                                }
+            except Exception as e:
+                print(f"⚠️ Exact camera detection failed: {e}")
+        
+        # Fallback to parent's detection system
+        detection = super().get_person_detection()
+        if detection:
+            detection['detection_method'] = 'FALLBACK'
+        return detection
 
     def save_calibration_offset(self):
         """Save REAL calibration offset data to CSV file"""
@@ -301,7 +542,7 @@ class PotentialFieldVisualizationTest(CoordinateVerificationLidarTest):
         print(f"🔧 Manual offset set: ({offset_x:+d}, {offset_y:+d}) pixels")
         self.last_save_message = f"MANUAL OFFSET: ({offset_x:+d}, {offset_y:+d})"
         self.last_save_time = time.time()
-    
+
     def initialize_csv_log(self):
         """Enhanced CSV with navigation metrics - SAME columns as parent plus nav data"""
         try:
@@ -338,267 +579,40 @@ class PotentialFieldVisualizationTest(CoordinateVerificationLidarTest):
             print(f"   4. Press X to save calibration data")
             print(f"   5. Repeat at different head angles: ±30°, ±45°")
             print(f"   6. Press C to calculate and apply offset")
-            print(f"   7. BLUE circle should then align with LiDAR detections")
+            print(f"   7. Blue circle should now align with LiDAR detections")
             print(f"")
-            print(f"🔧 TEST OFFSETS: Press 1 (no offset), 2 (+50px), 3 (-50px)")
             
         except Exception as e:
-            pass
+            print(f"⚠️ CSV log initialization failed: {e}")
     
-    def calculate_potential_field_grid(self):
-        """ENHANCED potential field with person filtering, force spreading, and proper force summation"""
+    def initialise(self):
+        """RESTORE working initialization + try exact camera"""
+        # Call parent initialization (keeps all working functionality)
+        super().initialise()
+        
+        # Try to initialize EXACT camera system as OPTIONAL enhancement
         try:
-            current_time = time.time()
-            if current_time - self.last_field_calculation < self.field_calculation_interval:
-                return
-            
-            self.last_field_calculation = current_time
-            self.potential_field_cache.clear()
-            
-            # Get person position first for filtering
-            person_screen_x = None
-            person_screen_y = None
-            
-            if self._cached_person_data:
-                person_data = self._cached_person_data
-                x_camera = person_data['x_camera']
-                z_camera = person_data['z_camera']
-                
-                if z_camera > 0:
-                    # Calculate person screen position
-                    person_angle_rad = math.atan2(x_camera, z_camera)
-                    person_angle_deg = math.degrees(person_angle_rad)
-                    display_angle_deg = 360 - person_angle_deg
-                    while display_angle_deg < 0:
-                        display_angle_deg += 360
-                    while display_angle_deg >= 360:
-                        display_angle_deg -= 360
-                    
-                    distance_m = z_camera / 1000.0
-                    display_angle_rad = math.radians(90 - display_angle_deg)
-                    person_screen_x = self.center_x + int(distance_m * self.scale * math.cos(display_angle_rad))
-                    person_screen_y = self.center_y - int(distance_m * self.scale * math.sin(display_angle_rad))
-            
-            # 1. FILTER OBSTACLES - Remove any within 300mm of person
-            filtered_obstacles = []
-            if self.lidar_system and person_screen_x is not None:
-                raw_obstacles = self.lidar_system.get_display_obstacles()
-                for angle, distance in raw_obstacles:
-                    # Calculate obstacle screen position
-                    corrected_angle_rad = math.radians(90 - angle)
-                    obs_screen_x = self.center_x + math.cos(corrected_angle_rad) * (distance * self.scale // 1000)
-                    obs_screen_y = self.center_y - math.sin(corrected_angle_rad) * (distance * self.scale // 1000)
-                    
-                    # Check distance from person (in screen pixels, convert to mm)
-                    screen_distance = math.sqrt((obs_screen_x - person_screen_x)**2 + (obs_screen_y - person_screen_y)**2)
-                    world_distance = screen_distance * 1000 / self.scale  # Convert back to mm
-                    
-                    # Only keep obstacles more than 300mm from person
-                    if world_distance > 300:
-                        filtered_obstacles.append((angle, distance, obs_screen_x, obs_screen_y))
-            
-            # 2. CREATE REPULSIVE FORCES AROUND FILTERED OBSTACLES (very localized)
-            for angle, distance, obs_screen_x, obs_screen_y in filtered_obstacles:
-                # Convert obstacle screen position to grid coordinates
-                obs_grid_x = int(round((obs_screen_x - self.center_x) / (self.grid_size * self.scale // 1000)))
-                obs_grid_y = int(round((self.center_y - obs_screen_y) / (self.grid_size * self.scale // 1000)))
-                
-                # Create very localized repulsive force - only immediate obstacle location
-                for dx in range(-1, 2):
-                    for dy in range(-1, 2):
-                        gx = obs_grid_x + dx
-                        gy = obs_grid_y + dy
-                        
-                        distance_from_obstacle = math.sqrt(dx*dx + dy*dy)
-                        if distance_from_obstacle == 0:
-                            repulsive_value = 2   # Only at exact obstacle location
-                        elif distance_from_obstacle <= 1.0:
-                            repulsive_value = 1   # Minimal for adjacent cells
-                        else:
-                            continue  # No repulsive force for diagonal cells
-                        
-                        # Add to grid (sum with existing values)
-                        if (gx, gy) in self.potential_field_cache:
-                            self.potential_field_cache[(gx, gy)] += repulsive_value
-                        else:
-                            self.potential_field_cache[(gx, gy)] = repulsive_value
-            
-            # 3. CREATE ATTRACTIVE FORCES AROUND PERSON (minimal values)
-            if person_screen_x is not None:
-                # Convert person screen position to grid coordinates
-                person_grid_x = int(round((person_screen_x - self.center_x) / (self.grid_size * self.scale // 1000)))
-                person_grid_y = int(round((self.center_y - person_screen_y) / (self.grid_size * self.scale // 1000)))
-                
-                # Create spreading attractive force (1 cell radius only) - MINIMAL VALUES
-                for dx in range(-1, 2):
-                    for dy in range(-1, 2):
-                        gx = person_grid_x + dx
-                        gy = person_grid_y + dy
-                        
-                        distance_from_person = math.sqrt(dx*dx + dy*dy)
-                        if distance_from_person == 0:
-                            attractive_value = -5   # Increased to max cap
-                        elif distance_from_person <= 1:
-                            attractive_value = -4   # Increased 
-                        else:
-                            attractive_value = -3   # Increased
-                        
-                        # Add to grid (sum with existing values)
-                        if (gx, gy) in self.potential_field_cache:
-                            self.potential_field_cache[(gx, gy)] += attractive_value
-                        else:
-                            self.potential_field_cache[(gx, gy)] = attractive_value
-            
-            # 4. CAP VALUES TO PREVENT EXTREME ACCUMULATION
-            # Clamp all values to reasonable range to prevent 50+ numbers
-            for key in self.potential_field_cache:
-                value = self.potential_field_cache[key]
-                self.potential_field_cache[key] = max(-5, min(5, value))  # Cap between -5 and +5
-            
-            # 5. FILTER OUT INSIGNIFICANT VALUES
-            # Remove entries with very small absolute values (adjusted for capped values)
-            self.potential_field_cache = {k: v for k, v in self.potential_field_cache.items() if abs(v) >= 1}
-                    
-        except Exception as e:
-            pass
-    
-    def draw_potential_field_grid(self):
-        """Display summed potential field values - STRICTLY WITHIN concentric rings only"""
-        try:
-            if not self.potential_field_cache:
-                return
-            
-            # Calculate outer ring radius very conservatively with large buffer
-            # Use the same calculation as the actual radar grid drawing
-            outer_ring_radius = (6000 * self.scale // 1000) - 60  # 60px buffer well inside ring
-            
-            font = pygame.font.Font(None, 28)  # Readable font
-            
-            for (grid_x, grid_y), potential in self.potential_field_cache.items():
-                # Convert grid coordinates to screen coordinates (center of grid cell)
-                world_x = grid_x * self.grid_size
-                world_y = grid_y * self.grid_size
-                
-                screen_x = self.center_x + int(world_x * self.scale // 1000)
-                screen_y = self.center_y - int(world_y * self.scale // 1000)
-                
-                # Calculate distance from center (robot position)
-                distance_from_center = math.sqrt((screen_x - self.center_x)**2 + (screen_y - self.center_y)**2)
-                
-                # STRICT boundary check - must be well within the outermost ring
-                # Also check minimum distance to avoid numbers too close to center
-                if distance_from_center > outer_ring_radius or distance_from_center < 50:
-                    continue
-                
-                # Additional safety check - ensure we're within reasonable screen bounds
-                screen_margin = 80
-                if not (screen_margin <= screen_x < self.screen.get_width() - screen_margin and 
-                       screen_margin <= screen_y < self.screen.get_height() - screen_margin):
-                    continue
-                
-                # Convert to integer for display
-                display_val = int(abs(potential))  # Always show as positive number
-                
-                # Color based on SUMMED result: GREEN for negative (attractive), RED for positive (repulsive)
-                if potential < 0:
-                    color = (0, 255, 0)  # Bright green for net attractive forces
-                else:
-                    color = (255, 0, 0)  # Bright red for net repulsive forces
-                
-                text = str(display_val)
-                
-                # Only display significant values (adjusted for reduced force values)
-                if display_val >= 1:
-                    # Draw text with black outline for better visibility
-                    outline_color = (0, 0, 0)
-                    
-                    # Draw text outline
-                    for dx in [-1, 0, 1]:
-                        for dy in [-1, 0, 1]:
-                            if dx != 0 or dy != 0:
-                                outline_surface = font.render(text, True, outline_color)
-                                outline_rect = outline_surface.get_rect(center=(screen_x + dx, screen_y + dy))
-                                self.screen.blit(outline_surface, outline_rect)
-                    
-                    # Draw main text
-                    text_surface = font.render(text, True, color)
-                    text_rect = text_surface.get_rect(center=(screen_x, screen_y))
-                    self.screen.blit(text_surface, text_rect)
-                        
-        except Exception:
-            pass  # Fail silently for performance
-    
-    def draw_grid_overlay(self):
-        """Draw potential field grid overlay lines"""
-        try:
-            if not self.screen:
-                return
-                
-            # Draw grid lines at regular intervals
-            grid_spacing = self.grid_size * self.scale // 1000  # Convert to screen pixels
-            
-            # Calculate grid bounds
-            max_screen_distance = min(self.center_x, self.center_y) - 50
-            
-            # Draw vertical grid lines
-            for x_offset in range(-max_screen_distance, max_screen_distance + 1, grid_spacing):
-                grid_x = self.center_x + x_offset
-                if 0 <= grid_x < self.screen.get_width():
-                    pygame.draw.line(self.screen, (0, 60, 0), 
-                                   (grid_x, self.center_y - max_screen_distance), 
-                                   (grid_x, self.center_y + max_screen_distance), 1)
-            
-            # Draw horizontal grid lines
-            for y_offset in range(-max_screen_distance, max_screen_distance + 1, grid_spacing):
-                grid_y = self.center_y + y_offset
-                if 0 <= grid_y < self.screen.get_height():
-                    pygame.draw.line(self.screen, (0, 60, 0), 
-                                   (self.center_x - max_screen_distance, grid_y), 
-                                   (self.center_x + max_screen_distance, grid_y), 1)
-                        
-        except Exception:
-            pass  # Fail silently for performance
-    
-    def draw_radar_grid(self):
-        """Draw radar-style grid - NO TEXT VERSION"""
-        try:
-            if not self.screen:
-                return
-                
-            # Draw range circles (NO LABELS)
-            for distance in [1000, 2000, 3000, 4000, 5000, 6000]:
-                radius = distance * self.scale // 1000
-                if radius < min(self.center_x, self.center_y) - 50:
-                    line_width = 3 if distance == 6000 else 2
-                    color = (0, 150, 0) if distance < 6000 else (255, 255, 0)
-                    pygame.draw.circle(self.screen, color, (self.center_x, self.center_y), radius, line_width)
-            
-            # Draw angle lines (NO LABELS)
-            for angle in [0, 45, 90, 135, 180, 225, 270, 315]:
-                display_angle_rad = math.radians(90 - angle)
-                line_length = min(self.center_x, self.center_y) - 80
-                end_x = self.center_x + int(line_length * math.cos(display_angle_rad))
-                end_y = self.center_y - int(line_length * math.sin(display_angle_rad))
-                line_width = 3 if angle % 90 == 0 else 1
-                pygame.draw.line(self.screen, (0, 150, 0), (self.center_x, self.center_y), (end_x, end_y), line_width)
-                
-        except Exception:
-            pass
-    
-    def draw_person_detection_no_text(self, person_data):
-        """Draw person detection with calibration markers and pixel position display"""
-        try:
-            if not self.screen or not person_data:
-                return
-            
-            # DISPLAY CURRENT APPLIED OFFSET AT TOP OF SCREEN IN LARGE FONT
-            huge_font = pygame.font.Font(None, 96)  # Very large font for offset display
-            if self.offset_calculated:
-                offset_text = huge_font.render(f"APPLIED OFFSET: ({self.applied_offset_x:+d}, {self.applied_offset_y:+d})", True, (0, 255, 255))
+            if DEPTHAI_AVAILABLE:
+                self.initialize_exact_camera()
+                print("✅ Optional exact camera system available")
             else:
-                offset_text = huge_font.render(f"NO OFFSET APPLIED - Use Calibration", True, (255, 255, 0))
-            
-            # Center the offset display at the top
+                print("⚠️ Exact camera system not available - using fallback")
+        except Exception as e:
+            print(f"⚠️ Exact camera system failed: {e} - using fallback")
+        
+        print("✅ Potential Field Visualization Test initialized")
+
+    def draw_person_detection_no_text(self, person_data=None):
+        """Draw person detection with calibration markers (no text to avoid clutter)"""
+        if person_data is None:
+            person_data = self.get_person_detection()
+        if not person_data:
+            return None
+        
+        try:
+            # Display current applied offset at top of screen
+            font = pygame.font.Font(None, 36)
+            offset_text = font.render(f"Applied Offset: X:{self.applied_offset_x} Y:{self.applied_offset_y}", True, (255, 255, 255))
             offset_rect = offset_text.get_rect(center=(self.screen.get_width() // 2, 50))
             self.screen.blit(offset_text, offset_rect)
                 
@@ -648,88 +662,34 @@ class PotentialFieldVisualizationTest(CoordinateVerificationLidarTest):
             adjusted_y = person_y + self.adjustment_y
             
             if (0 <= adjusted_x < self.screen.get_width() and 0 <= adjusted_y < self.screen.get_height()):
-                pygame.draw.circle(self.screen, (0, 255, 0), (adjusted_x, adjusted_y), 12)     # Large green filled circle
-                pygame.draw.circle(self.screen, (255, 255, 255), (adjusted_x, adjusted_y), 12, 2)  # White outline
-            
-            # Display pixel position in large font (top-left area, below the offset display)
-            large_font = pygame.font.Font(None, 64)  # Slightly smaller to fit more info
-            
-            # Original camera position
-            original_text = large_font.render(f"Raw Camera: ({person_x}, {person_y})", True, (255, 165, 0))
-            self.screen.blit(original_text, (20, 120))
-            
-            # Offset-corrected position (this should match lidar)
-            corrected_text = large_font.render(f"Corrected: ({corrected_x}, {corrected_y})", True, (0, 0, 255))
-            self.screen.blit(corrected_text, (20, 180))
-            
-            # Manual adjustment position  
-            adjusted_text = large_font.render(f"Manual Adj: ({adjusted_x}, {adjusted_y})", True, (0, 255, 0))
-            self.screen.blit(adjusted_text, (20, 240))
-            
-            # Current manual offset
-            offset_text = large_font.render(f"Manual Offset: ({self.adjustment_x:+d}, {self.adjustment_y:+d})", True, (255, 255, 255))
-            self.screen.blit(offset_text, (20, 300))
-            
-            # Instructions (smaller font)
-            instruction_font = pygame.font.Font(None, 36)
-            instructions = [
-                "WASD: Move green marker to align with lidar",
-                f"X: Save to offset{self.offset_file_counter}.csv",
-                "C: Calculate & apply offset from saved data", 
-                "1: No offset | 2: +50px right | 3: -50px left",
-                f"Orange: Raw | Blue: Corrected | Green: Manual",
-                f"Center: 960px"
-            ]
-            
-            for i, instruction in enumerate(instructions):
-                inst_text = instruction_font.render(instruction, True, (200, 200, 200))
-                self.screen.blit(inst_text, (20, 380 + i * 45))
-            
-            # Show save confirmation message (if recent)
-            if self.last_save_message and (time.time() - self.last_save_time) < 3.0:
-                save_font = pygame.font.Font(None, 64)
-                if "ERROR" in self.last_save_message:
-                    save_color = (255, 100, 100)  # Light red for errors
-                else:
-                    save_color = (100, 255, 100)  # Light green for success
-                
-                save_text = save_font.render(self.last_save_message, True, save_color)
-                # Position it prominently in the center-left area
-                self.screen.blit(save_text, (20, 560))
+                pygame.draw.circle(self.screen, (0, 255, 0), (adjusted_x, adjusted_y), 5)  # Green filled circle
                 
         except Exception:
-            pass  # Fail silently
+            pass
     
-    def update_navigation_system(self, person_data):
-        """ENHANCED navigation update with same obstacle filtering as potential field"""
+    def calculate_potential_field_grid(self):
+        """OPTIMIZE potential field calculation - force numbers on grid"""
         try:
-            if not person_data:
-                self.navigator.reset_navigation_state()
+            current_time = time.time()
+            if current_time - self.last_field_calculation < self.field_calculation_interval:
                 return
             
-            # Transform person to robot coordinates
-            x_camera = person_data['x_camera']
-            z_camera = person_data['z_camera']
-            head_angle_rad = math.radians(self.get_head_angle_degrees())
+            self.last_field_calculation = current_time
+            self.potential_field_cache = {}
             
-            camera_angle = math.atan2(x_camera, z_camera) if z_camera > 0 else 0.0
-            robot_angle = camera_angle + head_angle_rad
-            
-            # Normalize angle
-            while robot_angle > math.pi:
-                robot_angle -= 2 * math.pi
-            while robot_angle < -math.pi:
-                robot_angle += 2 * math.pi
-            
-            robot_distance = max(100, z_camera - 130)
-            self.navigator.set_person_position(robot_angle, robot_distance)
-            
-            # Get obstacles and FILTER using same 300mm criteria as potential field
-            filtered_obstacles = []
+            # Get LiDAR obstacles
+            obstacles = []
             if self.lidar_system:
-                raw_obstacles = self.lidar_system.get_display_obstacles()
+                obstacles = self.lidar_system.get_display_obstacles()
+            
+            # Get person position (use corrected position for field calculation)
+            person_screen_x = None
+            person_screen_y = None
+            if self._cached_person_data:
+                x_camera = self._cached_person_data['x_camera']
+                z_camera = self._cached_person_data['z_camera']
                 
-                # Calculate person screen position for filtering
+                # Calculate base person position
                 person_angle_rad = math.atan2(x_camera, z_camera)
                 person_angle_deg = math.degrees(person_angle_rad)
                 display_angle_deg = 360 - person_angle_deg
@@ -740,157 +700,163 @@ class PotentialFieldVisualizationTest(CoordinateVerificationLidarTest):
                 
                 distance_m = z_camera / 1000.0
                 display_angle_rad = math.radians(90 - display_angle_deg)
-                person_screen_x = self.center_x + int(distance_m * self.scale * math.cos(display_angle_rad))
-                person_screen_y = self.center_y - int(distance_m * self.scale * math.sin(display_angle_rad))
                 
-                for lidar_angle_deg, distance in raw_obstacles:
-                    # Calculate obstacle screen position
-                    corrected_angle_rad = math.radians(90 - lidar_angle_deg)
-                    obs_screen_x = self.center_x + math.cos(corrected_angle_rad) * (distance * self.scale // 1000)
-                    obs_screen_y = self.center_y - math.sin(corrected_angle_rad) * (distance * self.scale // 1000)
+                # Use CORRECTED position for field calculation
+                base_x = self.center_x + int(distance_m * self.scale * math.cos(display_angle_rad))
+                base_y = self.center_y - int(distance_m * self.scale * math.sin(display_angle_rad))
+                
+                person_screen_x = base_x + self.applied_offset_x
+                person_screen_y = base_y + self.applied_offset_y
+            
+            # Grid setup
+            grid_spacing = self.grid_size * self.scale // 1000
+            if grid_spacing <= 0:
+                grid_spacing = 50  # Fallback
+            
+            # 1. CREATE REPULSIVE FORCES AROUND OBSTACLES 
+            for angle, distance in obstacles:
+                if 100 <= distance <= 8000:  # Valid range
+                    angle_rad = math.radians(angle)
                     
-                    # Check distance from person (same calculation as potential field)
-                    screen_distance = math.sqrt((obs_screen_x - person_screen_x)**2 + (obs_screen_y - person_screen_y)**2)
-                    world_distance = screen_distance * 1000 / self.scale
+                    # Convert to cartesian screen coordinates
+                    obs_x = distance * math.sin(angle_rad)
+                    obs_y = distance * math.cos(angle_rad)
                     
-                    # Only keep obstacles more than 300mm from person
-                    if world_distance > 300:
-                        # Convert to robot coordinates for navigation
-                        obs_angle_rad = math.radians(lidar_angle_deg)
-                        while obs_angle_rad > math.pi:
-                            obs_angle_rad -= 2 * math.pi
-                        while obs_angle_rad < -math.pi:
-                            obs_angle_rad += 2 * math.pi
+                    obs_screen_x = self.center_x + int(obs_x * self.scale / 1000)
+                    obs_screen_y = self.center_y - int(obs_y * self.scale / 1000)
+                    
+                    # Convert to grid coordinates
+                    obs_grid_x = int(round((obs_screen_x - self.center_x) / grid_spacing))
+                    obs_grid_y = int(round((self.center_y - obs_screen_y) / grid_spacing))
+                    
+                    # Add repulsive forces in 3x3 around obstacle - MINIMAL VALUES
+                    for dx in range(-1, 2):
+                        for dy in range(-1, 2):
+                            gx = obs_grid_x + dx
+                            gy = obs_grid_y + dy
+                            
+                            distance_from_obs = math.sqrt(dx*dx + dy*dy)
+                            if distance_from_obs == 0:
+                                repulsive_value = 3   # Reduced from 5
+                            elif distance_from_obs <= 1:
+                                repulsive_value = 2   # Reduced from 3
+                            else:
+                                repulsive_value = 1   # Same
+                            
+                            # Add to grid (sum with existing values)
+                            if (gx, gy) in self.potential_field_cache:
+                                self.potential_field_cache[(gx, gy)] += repulsive_value
+                            else:
+                                self.potential_field_cache[(gx, gy)] = repulsive_value
+            
+            # 2. CREATE ATTRACTIVE FORCES AROUND PERSON (minimal values)
+            if person_screen_x is not None:
+                # Convert person screen position to grid coordinates
+                person_grid_x = int(round((person_screen_x - self.center_x) / grid_spacing))
+                person_grid_y = int(round((self.center_y - person_screen_y) / grid_spacing))
+                
+                # Create spreading attractive force (1 cell radius only) - MINIMAL VALUES
+                for dx in range(-1, 2):
+                    for dy in range(-1, 2):
+                        gx = person_grid_x + dx
+                        gy = person_grid_y + dy
                         
-                        filtered_obstacles.append((obs_angle_rad, distance))
+                        distance_from_person = math.sqrt(dx*dx + dy*dy)
+                        if distance_from_person == 0:
+                            attractive_value = -5   # Increased to max cap
+                        elif distance_from_person <= 1:
+                            attractive_value = -4   # Increased 
+                        else:
+                            attractive_value = -3   # Increased
+                        
+                        # Add to grid (sum with existing values)
+                        if (gx, gy) in self.potential_field_cache:
+                            self.potential_field_cache[(gx, gy)] += attractive_value
+                        else:
+                            self.potential_field_cache[(gx, gy)] = attractive_value
             
-            self.navigator.set_obstacles(filtered_obstacles)
-            
-            # Calculate navigation (lightweight)
-            if self.navigation_enabled:
-                movement_direction, speed_factor = self.navigator.calculate_navigation_command()
-                nav_metrics = self.navigator.get_navigation_metrics()
-                self.last_navigation_metrics = {
-                    'total_force': nav_metrics.get('total_force_magnitude', 0.0),
-                    'attractive_force': nav_metrics.get('attractive_force_magnitude', 0.0),
-                    'repulsive_force': nav_metrics.get('repulsive_force_magnitude', 0.0),
-                    'movement_command': movement_direction.name,
-                    'decision': nav_metrics.get('navigation_decision', 'none'),
-                    'in_target_zone': abs(robot_distance - 1500) < 200,
-                    'obstacles_filtered': len(filtered_obstacles)  # Track filtered count
-                }
-            
-            # Update field visualization
-            self.calculate_potential_field_grid()
+            # 4. CAP VALUES TO PREVENT EXTREME ACCUMULATION
+            # Clamp all values to reasonable range to prevent 50+ numbers
+            for key in self.potential_field_cache:
+                value = self.potential_field_cache[key]
+                self.potential_field_cache[key] = max(-5, min(5, value))  # Cap between -5 and +5
             
         except Exception:
             pass  # Fail silently for performance
     
-    def log_detection_consistency_to_csv(self, person_data):
-        """OPTIMIZED CSV logging - calls parent method then adds minimal nav data"""
+    def draw_grid_overlay(self):
+        """Draw simple grid overlay lines - FIXED VERSION"""
         try:
-            # Do ALL the parent logging first (this preserves existing functionality)
-            # We'll recreate the parent's CSV structure manually to avoid calling the parent method
-            # since we need different columns
-            
-            if not self.csv_initialized:
-                self.initialize_csv_log()
-            
-            # Standard detection tracking (from parent)
-            bbox_center = person_data['bbox_center']
-            x_midpoint_pixels = bbox_center['x_pixels']
-            self.x_midpoints_pixels.append(x_midpoint_pixels)
-            self.variance_window.append(x_midpoint_pixels)
-            
-            is_large_jump = False
-            if self.last_x_midpoint is not None:
-                x_jump = abs(x_midpoint_pixels - self.last_x_midpoint)
-                is_large_jump = x_jump > self.jump_threshold_pixels
-                if is_large_jump:
-                    self.large_jumps_count += 1
-            self.last_x_midpoint = x_midpoint_pixels
-            self.detection_count += 1
-            if not is_large_jump:
-                self.consistent_detection_count += 1
-            
-            self.current_variance_pixels, self.current_std_dev_pixels, self.current_mean_pixels = self.calculate_x_midpoint_variance()
-            
-            # Coordinate verification (from parent)
-            current_time = time.time()
-            mode_elapsed = current_time - self.mode_start_time
-            head_angle_deg = self.get_head_angle_degrees()
-            head_angle_rad = math.radians(head_angle_deg)
-            
-            x_camera = person_data['x_camera']
-            z_camera = person_data['z_camera']
-            camera_angle = math.atan2(x_camera, z_camera) if z_camera > 0 else 0.0
-            robot_angle = camera_angle + head_angle_rad
-            while robot_angle > math.pi:
-                robot_angle -= 2 * math.pi
-            while robot_angle < -math.pi:
-                robot_angle += 2 * math.pi
-            robot_angle_deg = math.degrees(robot_angle)
-            robot_distance = max(100, z_camera - 130)
-            
-            # LiDAR analysis (simplified from parent)
-            raw_lidar_obstacles = []
-            if self.lidar_system:
-                raw_lidar_obstacles = self.lidar_system.get_display_obstacles()
-            
-            closest_lidar_angle = 0
-            closest_lidar_distance = 0
-            angle_diff = 999
-            distance_diff = 9999
-            coordinates_aligned = False
-            alignment_score = 0.0
-            detection_quality = 0
-            
-            if raw_lidar_obstacles:
-                # Find best match (simplified)
-                best_match = None
-                best_score = 0
-                for lidar_angle, lidar_distance in raw_lidar_obstacles[:5]:  # Check only first 5
-                    lidar_norm = lidar_angle if lidar_angle <= 180 else lidar_angle - 360
-                    ang_diff = abs(robot_angle_deg - lidar_norm)
-                    if ang_diff > 180:
-                        ang_diff = 360 - ang_diff
-                    dist_diff = abs(robot_distance - lidar_distance)
-                    
-                    if ang_diff <= 20:
-                        match_score = 1.0 / (1.0 + ang_diff + dist_diff/1000.0)
-                        if match_score > best_score:
-                            best_score = match_score
-                            best_match = (lidar_angle, lidar_distance, ang_diff, dist_diff)
+            if not self.screen:
+                return
                 
-                if best_match:
-                    closest_lidar_angle, closest_lidar_distance, angle_diff, distance_diff = best_match
-                    coordinates_aligned = (angle_diff <= 5.0 and distance_diff <= 500)
-                    alignment_score = max(0, 1.0 - (angle_diff + distance_diff/1000.0) / 20.0)
-                    detection_quality = min(5, len(raw_lidar_obstacles))  # Cap at 5
+            # Use a simple fixed grid spacing in pixels
+            grid_spacing_pixels = 100  # 100 pixel grid spacing
+            grid_color = (0, 40, 0)  # Very dark green so it doesn't interfere
             
-            # Write to CSV with navigation data
-            with open(self.csv_log_filename, 'a', newline='') as csvfile:
-                writer = csv.writer(csvfile)
-                writer.writerow([
-                    current_time, mode_elapsed,
-                    True, x_camera, z_camera, person_data.get('confidence', 0.0),
-                    robot_angle_deg, robot_distance, 1.0,
-                    head_angle_deg, self.head_tracking_enabled,
-                    len(raw_lidar_obstacles), closest_lidar_angle, closest_lidar_distance,
-                    angle_diff, distance_diff, coordinates_aligned, alignment_score, detection_quality,
-                    # Navigation data (minimal)
-                    self.last_navigation_metrics.get('total_force', 0.0),
-                    self.last_navigation_metrics.get('attractive_force', 0.0),
-                    self.last_navigation_metrics.get('repulsive_force', 0.0),
-                    self.last_navigation_metrics.get('movement_command', 'NONE'),
-                    self.last_navigation_metrics.get('decision', 'none'),
-                    self.last_navigation_metrics.get('in_target_zone', False),
-                    self.last_navigation_metrics.get('obstacles_filtered', 0)
-                ])
+            screen_width = self.screen.get_width()
+            screen_height = self.screen.get_height()
+            
+            # Draw vertical grid lines
+            for x in range(0, screen_width, grid_spacing_pixels):
+                pygame.draw.line(self.screen, grid_color, (x, 0), (x, screen_height), 1)
+            
+            # Draw horizontal grid lines
+            for y in range(0, screen_height, grid_spacing_pixels):
+                pygame.draw.line(self.screen, grid_color, (0, y), (screen_width, y), 1)
                 
         except Exception:
             pass  # Fail silently for performance
     
+    def draw_potential_field_grid(self):
+        """Draw potential field force numbers on grid points"""
+        try:
+            if not self.screen:
+                return
+                
+            font = pygame.font.Font(None, 24)
+            grid_spacing = self.grid_size * self.scale // 1000
+            
+            for (gx, gy), value in self.potential_field_cache.items():
+                # Calculate screen position from grid position
+                screen_x = self.center_x + gx * grid_spacing
+                screen_y = self.center_y - gy * grid_spacing
+                
+                # Check bounds
+                if (0 <= screen_x < self.screen.get_width() and 0 <= screen_y < self.screen.get_height()):
+                    
+                    # Convert to display value
+                    display_val = int(abs(value))
+                    
+                    # Color coding
+                    if value < 0:
+                        color = (0, 255, 0)  # Bright green for net attractive forces
+                    else:
+                        color = (255, 0, 0)  # Bright red for net repulsive forces
+                    
+                    text = str(display_val)
+                    
+                    # Only display significant values (adjusted for reduced force values)
+                    if display_val >= 1:
+                        # Draw text with black outline for better visibility
+                        outline_color = (0, 0, 0)
+                        
+                        # Draw text outline
+                        for dx in [-1, 0, 1]:
+                            for dy in [-1, 0, 1]:
+                                if dx != 0 or dy != 0:
+                                    outline_surface = font.render(text, True, outline_color)
+                                    outline_rect = outline_surface.get_rect(center=(screen_x + dx, screen_y + dy))
+                                    self.screen.blit(outline_surface, outline_rect)
+                        
+                        # Draw main text
+                        text_surface = font.render(text, True, color)
+                        text_rect = text_surface.get_rect(center=(screen_x, screen_y))
+                        self.screen.blit(text_surface, text_rect)
+                        
+        except Exception:
+            pass  # Fail silently for performance
+
     def update(self) -> Status:
         """OPTIMIZED update method - minimal overhead"""
         try:
@@ -962,20 +928,14 @@ class PotentialFieldVisualizationTest(CoordinateVerificationLidarTest):
             
             pygame.event.pump()
 
-            # Detection and head tracking (UNCHANGED - preserve existing functionality)
+            # Always poll detection + update head every tick (UNCHANGED from working version)
             person_data = self.get_person_detection()
             if person_data:
                 self._cached_person_data = person_data
                 self._cache_t = time.time()
-                
-                # HEAD TRACKING (ensure this works exactly as parent)
                 if self.head_tracking_enabled:
                     self.update_head_tracking(person_data)
-                
-                # Navigation update (lightweight)
-                self.update_navigation_system(person_data)
             else:
-                # Head tracking fallback (preserve parent behavior)
                 if self._cached_person_data and (time.time() - self._cache_t) <= 0.25 and self.head_tracking_enabled:
                     self.update_head_tracking(self._cached_person_data)
                 elif self.head_tracker and time.time() - self.last_person_detected > self.person_lost_timeout:
@@ -1010,9 +970,18 @@ class PotentialFieldVisualizationTest(CoordinateVerificationLidarTest):
                         if self._cached_person_data:
                             self.draw_person_detection_no_text(self._cached_person_data)
                         
-                        # POTENTIAL FIELD VALUES (drawn after obstacles/person for visibility)
-                        # FORCE NUMBERS ONLY (no other text)
+                        # Calculate and draw potential field
+                        self.calculate_potential_field_grid()
                         self.draw_potential_field_grid()
+                        
+                        # Draw info
+                        self.draw_info(obstacle_count)
+                        
+                        # Display save message if recent
+                        if self.last_save_message and time.time() - self.last_save_time < 3.0:
+                            font = pygame.font.Font(None, 36)
+                            text = font.render(self.last_save_message, True, (255, 255, 255))
+                            self.screen.blit(text, (50, 100))  # Below offset display
                         
                         pygame.display.flip()
                 except Exception:
@@ -1023,10 +992,20 @@ class PotentialFieldVisualizationTest(CoordinateVerificationLidarTest):
             return Status.RUNNING
     
     def terminate(self, new_status: Status):
-        """Clean termination"""
+        """Clean termination with exact camera cleanup"""
         # Reset navigation system
         if hasattr(self, 'navigator'):
             self.navigator.reset_navigation_state()
+        
+        try:
+            # Stop exact camera system if initialized
+            if self.exact_device:
+                print("🛑 Stopping exact camera system...")
+                self.exact_device.close()
+                self.exact_device = None
+                print("✅ Exact camera system stopped")
+        except Exception as e:
+            print(f"⚠️ Error stopping exact camera: {e}")
         
         # Call parent termination (handles everything else)
         super().terminate(new_status)

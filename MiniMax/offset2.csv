@@ -1,0 +1,2 @@
+timestamp,head_angle_deg,offset_x_pixels,offset_y_pixels,original_camera_x_pixels,original_camera_y_pixels,adjusted_camera_x_pixels,adjusted_camera_y_pixels,camera_x_mm,camera_z_mm,camera_confidence,closest_lidar_angle_deg,closest_lidar_distance_mm,person_distance_mm,screen_center_x,screen_center_y
+1755237983.0314436,21.464048735845655,-130,40,988,402,858,442,-186.69528198242188,917.9138793945312,0.998046875,210.0,300,917.9138793945312,960,540
